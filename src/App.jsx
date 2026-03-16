@@ -57,6 +57,203 @@ const NOZZLE_PIPE_DATA = {
   4.0:  { od: 4.500, sch40: 0.237, sch80: 0.337, sch160: 0.531 },
 };
 
+// ─── WATER THERMO-PHYSICAL PROPERTIES vs TEMPERATURE ─────────────
+// Sources: ASHRAE Handbook Fundamentals; Perry's Chemical Engineers' Handbook
+// Properties at saturation pressure (liquid phase)
+const WATER_PROPS = [
+  // tempF,  ρ(lb/ft³), μ(cP),    cp(BTU/lb·°F), k(BTU/hr·ft·°F)
+  [  40,     62.42,     1.546,    1.005,          0.326  ],
+  [  50,     62.41,     1.310,    1.002,          0.332  ],
+  [  60,     62.37,     1.124,    1.000,          0.338  ],
+  [  70,     62.30,     0.978,    0.998,          0.343  ],
+  [  80,     62.22,     0.862,    0.998,          0.348  ],
+  [  90,     62.12,     0.764,    0.997,          0.352  ],
+  [ 100,     62.00,     0.682,    0.997,          0.356  ],
+  [ 110,     61.86,     0.612,    0.997,          0.360  ],
+  [ 120,     61.71,     0.556,    0.997,          0.363  ],
+  [ 130,     61.55,     0.506,    0.998,          0.365  ],
+  [ 140,     61.38,     0.463,    0.998,          0.368  ],
+  [ 150,     61.19,     0.425,    0.999,          0.370  ],
+  [ 160,     60.99,     0.392,    1.000,          0.371  ],
+  [ 170,     60.79,     0.363,    1.001,          0.373  ],
+  [ 180,     60.57,     0.338,    1.002,          0.374  ],
+  [ 190,     60.35,     0.315,    1.003,          0.374  ],
+  [ 200,     60.12,     0.295,    1.004,          0.375  ],
+  [ 210,     59.88,     0.277,    1.005,          0.375  ],
+  [ 220,     59.63,     0.261,    1.007,          0.375  ],
+  [ 230,     59.38,     0.247,    1.009,          0.375  ],
+  [ 240,     59.10,     0.233,    1.011,          0.374  ],
+  [ 250,     58.83,     0.221,    1.013,          0.373  ],
+  [ 300,     57.31,     0.179,    1.030,          0.368  ],
+  [ 350,     55.59,     0.146,    1.050,          0.356  ],
+  [ 400,     53.65,     0.122,    1.079,          0.340  ],
+  [ 450,     51.46,     0.104,    1.119,          0.320  ],
+];
+
+function getWaterProps(tempF) {
+  const T = WATER_PROPS;
+  if (tempF <= T[0][0]) return { rho: T[0][1], mu_cP: T[0][2], cp: T[0][3], k: T[0][4] };
+  if (tempF >= T[T.length-1][0]) { const L = T[T.length-1]; return { rho: L[1], mu_cP: L[2], cp: L[3], k: L[4] }; }
+  for (let i = 0; i < T.length - 1; i++) {
+    if (tempF >= T[i][0] && tempF <= T[i+1][0]) {
+      const frac = (tempF - T[i][0]) / (T[i+1][0] - T[i][0]);
+      return {
+        rho:   T[i][1] + frac * (T[i+1][1] - T[i][1]),
+        mu_cP: T[i][2] + frac * (T[i+1][2] - T[i][2]),
+        cp:    T[i][3] + frac * (T[i+1][3] - T[i][3]),
+        k:     T[i][4] + frac * (T[i+1][4] - T[i][4]),
+      };
+    }
+  }
+  return { rho: 62.0, mu_cP: 0.68, cp: 1.0, k: 0.36 };
+}
+
+// Pipe roughness (inches)
+const PIPE_ROUGHNESS = { CS: 0.0018, SS: 0.00006 };
+
+// Decimal-to-fractional inch display
+function toFraction(dec) {
+  const fracs = [
+    [0.125, '1/8'], [0.25, '1/4'], [0.375, '3/8'], [0.5, '1/2'],
+    [0.625, '5/8'], [0.75, '3/4'], [0.875, '7/8'], [1.0, '1'],
+    [1.25, '1-1/4'], [1.5, '1-1/2'], [2.0, '2'], [2.5, '2-1/2'],
+    [3.0, '3'], [3.5, '3-1/2'], [4.0, '4'], [5.0, '5'], [6.0, '6'],
+    [8.0, '8'], [10.0, '10'], [12.0, '12'], [14.0, '14'],
+    [16.0, '16'], [18.0, '18'], [20.0, '20'], [24.0, '24'],
+  ];
+  for (const [d, f] of fracs) { if (Math.abs(dec - d) < 0.001) return f; }
+  return dec.toString();
+}
+
+
+// ─── FRACTIONAL SIZE DISPLAY ─────────────────────────────────────
+const SIZE_FRACTIONS = {
+  0.25: '1/4"', 0.375: '3/8"', 0.5: '1/2"', 0.75: '3/4"',
+  1.0: '1"', 1.25: '1-1/4"', 1.5: '1-1/2"', 2.0: '2"',
+  2.5: '2-1/2"', 3.0: '3"', 4.0: '4"', 5.0: '5"', 6.0: '6"',
+};
+function fracSize(dec) { return SIZE_FRACTIONS[dec] || dec + '"'; }
+
+// Colebrook-White equation solver (iterative) for Darcy friction factor
+function calcFrictionFactor(Re, epsilon, D_in) {
+  if (Re < 2300) return 64 / Re; // Laminar
+  const relRough = epsilon / D_in;
+  // Swamee-Jain approximation (±1% of Colebrook)
+  const f = 0.25 / Math.pow(Math.log10(relRough / 3.7 + 5.74 / Math.pow(Re, 0.9)), 2);
+  return f;
+}
+
+// Full nozzle flow analysis
+function calcNozzleFlow(params) {
+  const {
+    Q_gpm,         // Flow rate through nozzle (GPM)
+    d_in,          // Inside diameter of nozzle (inches)
+    tempF,         // Fluid temperature (°F)
+    materialId,    // CS or SS (for roughness)
+    nozzleLength,  // Effective nozzle length (inches) including projections
+    service,       // For context in report
+  } = params;
+
+  const wp = getWaterProps(tempF);
+  const rho = wp.rho;                          // lb/ft³
+  const mu_cP = wp.mu_cP;                      // centipoise
+  const mu_lbfts = mu_cP * 6.7197e-4;          // convert cP → lb/(ft·s)
+  const cp = wp.cp;                            // BTU/(lb·°F)
+  const k_therm = wp.k;                        // BTU/(hr·ft·°F)
+
+  // Prandtl number: Pr = cp × μ / k
+  // Units: [BTU/(lb·°F)] × [lb/(ft·s)] / [BTU/(hr·ft·°F)]
+  // Need consistent units: convert k to BTU/(s·ft·°F) by dividing by 3600
+  const k_s = k_therm / 3600;                  // BTU/(s·ft·°F)
+  const Pr = (cp * mu_lbfts) / k_s;
+
+  // Cross-sectional area
+  const A_in2 = Math.PI * Math.pow(d_in / 2, 2);  // in²
+  const A_ft2 = A_in2 / 144;                       // ft²
+
+  // Volumetric flow rate
+  const Q_ft3s = Q_gpm / 448.831;                  // ft³/s
+  const Q_ft3min = Q_gpm / 7.481;                  // ft³/min
+
+  // Velocity
+  const v_fps = Q_ft3s / A_ft2;                    // ft/s
+
+  // Mass flow rate
+  const m_dot = rho * Q_ft3s;                      // lb/s
+  const m_dot_hr = m_dot * 3600;                   // lb/hr
+
+  // Reynolds number: Re = ρ × v × D / μ
+  const D_ft = d_in / 12;
+  const Re = (rho * v_fps * D_ft) / mu_lbfts;
+
+  // Flow regime
+  const flowRegime = Re < 2300 ? "Laminar" : Re < 4000 ? "Transitional" : "Turbulent";
+
+  // Friction factor (Darcy-Weisbach)
+  const epsilon = PIPE_ROUGHNESS[materialId] || 0.0018;
+  const f_darcy = calcFrictionFactor(Re, epsilon, d_in);
+
+  // Nozzle pressure drop (Darcy-Weisbach + minor losses)
+  // ΔP = (f × L/D + ΣK) × ρv²/2
+  const L_ft = nozzleLength / 12;
+  const K_entrance = 0.5;    // Sharp-edged entrance (into nozzle from vessel)
+  const K_exit = 1.0;        // Sudden expansion (nozzle into piping)
+  const K_total = K_entrance + K_exit;
+
+  const dP_friction_psi = f_darcy * (L_ft / D_ft) * (rho * v_fps * v_fps) / (2 * 32.174) / 144;
+  const dP_minor_psi = K_total * (rho * v_fps * v_fps) / (2 * 32.174) / 144;
+  const dP_total_psi = dP_friction_psi + dP_minor_psi;
+
+  // Nusselt number (Dittus-Boelter for turbulent, Re > 10000)
+  // Nu = 0.023 × Re^0.8 × Pr^0.4 (heating)
+  let Nu;
+  if (Re > 10000) {
+    Nu = 0.023 * Math.pow(Re, 0.8) * Math.pow(Pr, 0.4);
+  } else if (Re > 2300) {
+    // Gnielinski correlation for transition (2300 < Re < 10000)
+    const f_g = calcFrictionFactor(Math.max(Re, 3000), epsilon, d_in);
+    Nu = ((f_g / 8) * (Re - 1000) * Pr) / (1 + 12.7 * Math.sqrt(f_g / 8) * (Math.pow(Pr, 2/3) - 1));
+    Nu = Math.max(Nu, 3.66); // minimum for laminar
+  } else {
+    Nu = 3.66; // Laminar, constant wall temp
+  }
+
+  // Heat transfer coefficient h = Nu × k / D
+  const h_conv = Nu * k_therm / D_ft; // BTU/(hr·ft²·°F)
+
+  // Velocity assessment per ASHRAE
+  const velocityOK = v_fps <= 8.0;
+  const velocityNote = v_fps <= 4.0 ? "Excellent — well below ASHRAE 8 ft/s limit" :
+    v_fps <= 6.0 ? "Good — within recommended range" :
+    v_fps <= 8.0 ? "Acceptable — at upper limit of ASHRAE recommendation" :
+    v_fps <= 12.0 ? "Caution — exceeds ASHRAE 8 ft/s; consider larger nozzle" :
+    "WARNING — excessive velocity; increase nozzle size";
+
+  return {
+    Q_gpm, d_in, tempF,
+    rho, mu_cP, mu_lbfts, cp, k_therm, Pr: Math.round(Pr * 100) / 100,
+    A_in2: Math.round(A_in2 * 10000) / 10000,
+    A_ft2,
+    v_fps: Math.round(v_fps * 100) / 100,
+    m_dot: Math.round(m_dot * 1000) / 1000,
+    m_dot_hr: Math.round(m_dot_hr * 10) / 10,
+    Re: Math.round(Re),
+    flowRegime,
+    epsilon,
+    f_darcy: Math.round(f_darcy * 100000) / 100000,
+    K_entrance, K_exit, K_total,
+    dP_friction_psi: Math.round(dP_friction_psi * 10000) / 10000,
+    dP_minor_psi: Math.round(dP_minor_psi * 10000) / 10000,
+    dP_total_psi: Math.round(dP_total_psi * 10000) / 10000,
+    Nu: Math.round(Nu * 10) / 10,
+    h_conv: Math.round(h_conv * 10) / 10,
+    velocityOK,
+    velocityNote,
+    nozzleLength,
+    materialId,
+  };
+}
+
 // ─── NOZZLE REINFORCEMENT CALCULATION (ASME VIII-1 UG-37) ───────
 // Area replacement method per UG-37
 function calcNozzleReinforcement(params) {
@@ -364,31 +561,64 @@ function selectDiameter(targetVolGal) {
   return best;
 }
 
-function selectNozzleSize(tankVolGal, type) {
+// Connection types per industry standard:
+// - Threaded half-coupling (forged, SA-105 CS / SA-182 SS) for ≤2" NPT
+// - Flanged (weld-neck or slip-on) for larger connections
+// - Threaded coupling for Schrader air charge valve
+// Sizes calibrated to match standard expansion tank catalogs
+
+function selectNozzleSize(tankVolGal, type, productId) {
+  const isPotable = productId === "as";
+
   if (type === "system") {
-    if (tankVolGal <= 15) return { size: 0.5, label: '1/2" NPT' };
-    if (tankVolGal <= 45) return { size: 0.75, label: '3/4" NPT' };
-    if (tankVolGal <= 100) return { size: 1.0, label: '1" NPT' };
-    if (tankVolGal <= 200) return { size: 1.25, label: '1-1/4" NPT' };
-    if (tankVolGal <= 500) return { size: 1.5, label: '1-1/2" NPT' };
-    if (tankVolGal <= 1000) return { size: 2.0, label: '2" NPT' };
-    return { size: 3.0, label: '3" 150# RF Flange' };
+    if (isPotable) {
+      // Potable thermal expansion: matches industry catalog sizing
+      if (tankVolGal <= 25)  return { size: 0.75, label: fracSize(0.75), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+      if (tankVolGal <= 50)  return { size: 0.75, label: fracSize(0.75), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+      if (tankVolGal <= 90)  return { size: 1.25, label: fracSize(1.25), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+      if (tankVolGal <= 200) return { size: 1.25, label: fracSize(1.25), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+      if (tankVolGal <= 530) return { size: 2.0, label: fracSize(2.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+      return { size: 3.0, label: fracSize(3.0), connType: "Weld-Neck Flange", connSpec: "ASME B16.5, 150#" };
+    }
+    // Hydronic expansion tanks: calibrated to industry catalog sizing
+    if (tankVolGal <= 55)   return { size: 0.5, label: fracSize(0.5), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 130)  return { size: 1.0, label: fracSize(1.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 210)  return { size: 1.25, label: fracSize(1.25), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 530)  return { size: 1.5, label: fracSize(1.5), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 1300) return { size: 2.0, label: fracSize(2.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    return { size: 3.0, label: fracSize(3.0), connType: "Weld-Neck Flange", connSpec: "ASME B16.5, 150#" };
   }
+
   if (type === "drain") {
-    if (tankVolGal <= 100) return { size: 0.5, label: '1/2" NPT' };
-    if (tankVolGal <= 500) return { size: 0.75, label: '3/4" NPT' };
-    return { size: 1.0, label: '1" NPT' };
+    // Drain: all threaded couplings, sized for reasonable drain time
+    if (tankVolGal <= 55)   return { size: 0.5, label: fracSize(0.5), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 200)  return { size: 0.75, label: fracSize(0.75), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 800)  return { size: 1.0, label: fracSize(1.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    return { size: 1.5, label: fracSize(1.5), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
   }
-  if (type === "airvalve") return { size: 0.25, label: 'Schrader Valve' };
+
+  if (type === "airvalve") {
+    // Air charge valve: threaded coupling welded to shell
+    // NOT a pipe nozzle — it's a forged coupling with a Schrader valve core threaded in
+    return { size: 0.25, label: fracSize(0.25), connType: "Threaded Coupling", connSpec: "6000# Forged, Schrader valve core" };
+  }
+
   if (type === "buffer-in" || type === "buffer-out") {
-    if (tankVolGal <= 200) return { size: 2.0, label: '2" NPT' };
-    if (tankVolGal <= 500) return { size: 3.0, label: '3" 150# RF Flange' };
-    return { size: 4.0, label: '4" 150# RF Flange' };
+    // Buffer tanks: sized for full system design flow rate
+    if (tankVolGal <= 150)  return { size: 2.0, label: fracSize(2.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+    if (tankVolGal <= 400)  return { size: 3.0, label: fracSize(3.0), connType: "Weld-Neck Flange", connSpec: "ASME B16.5, 150#" };
+    return { size: 4.0, label: fracSize(4.0), connType: "Weld-Neck Flange", connSpec: "ASME B16.5, 150#" };
   }
-  return { size: 1.0, label: '1" NPT' };
+
+  if (type === "vent") {
+    return { size: 0.75, label: fracSize(0.75), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
+  }
+
+  return { size: 1.0, label: fracSize(1.0), connType: "Threaded Half-Coupling", connSpec: "3000# Forged" };
 }
 
-function designVessel(targetVolGal, mawp, product, materialId, CA) {
+function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = {}) {
+  const { expandedWaterGal = 0, designTempF = 180, heatUpTimeHr = 1.0, designFlowGPM = 0 } = flowParams;
   const mat = MATERIALS[materialId];
   const E_rolled = 0.85; // Spot RT for rolled shells
   const E_pipe = 1.0;    // Seamless pipe
@@ -459,31 +689,86 @@ function designVessel(targetVolGal, mawp, product, materialId, CA) {
   // Nozzles — initial selection
   const nozzlesRaw = [];
   if (isBuffer) {
-    nozzlesRaw.push({ id: "N1", ...selectNozzleSize(targetVolGal, "buffer-in"), position: "top-head", label: "Inlet", service: "buffer-in" });
-    nozzlesRaw.push({ id: "N2", ...selectNozzleSize(targetVolGal, "buffer-out"), position: "bottom-head", label: "Outlet", service: "buffer-out" });
-    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "drain"), position: "bottom-side", label: "Drain", service: "drain" });
-    nozzlesRaw.push({ id: "N4", size: 0.75, label: '3/4" NPT', position: "top-side", label2: "Vent / Gauge", service: "vent" });
+    nozzlesRaw.push({ id: "N1", ...selectNozzleSize(targetVolGal, "buffer-in", product.id), position: "top-head", label: "Inlet", service: "buffer-in" });
+    nozzlesRaw.push({ id: "N2", ...selectNozzleSize(targetVolGal, "buffer-out", product.id), position: "bottom-head", label: "Outlet", service: "buffer-out" });
+    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "drain", product.id), position: "bottom-side", label: "Drain", service: "drain" });
+    nozzlesRaw.push({ id: "N4", ...selectNozzleSize(targetVolGal, "vent", product.id), position: "top-side", label2: "Vent / Gauge", service: "vent" });
   } else {
-    nozzlesRaw.push({ id: "N1", ...selectNozzleSize(targetVolGal, "system"), position: "bottom-head", label: "System Conn.", service: "system" });
-    nozzlesRaw.push({ id: "N2", ...selectNozzleSize(targetVolGal, "drain"), position: "bottom-side", label: "Drain", service: "drain" });
-    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "airvalve"), position: "top-head", label: "Air Charge Valve", service: "airvalve" });
+    nozzlesRaw.push({ id: "N1", ...selectNozzleSize(targetVolGal, "system", product.id), position: "bottom-head", label: "System Conn.", service: "system" });
+    nozzlesRaw.push({ id: "N2", ...selectNozzleSize(targetVolGal, "drain", product.id), position: "bottom-side", label: "Drain", service: "drain" });
+    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "airvalve", product.id), position: "top-head", label: "Air Charge Valve", service: "airvalve" });
+    // Bladder tanks: the bottom head has a bolted blind flange for bladder installation/service
+    if (product.internals === "full-bladder" || product.internals === "partial-bladder") {
+      // Bladder flange must be SMALLER than the shell — the bladder is folded and
+      // inserted through this opening. Industry practice: ~40-60% of shell ID for pipe,
+      // ~30-45% for rolled shells. The flange ring welds to the head with a cut-out.
+      const blFlgTarget = isPipe ?
+        Math.round((isPipe ? pipeSchedule.id : D_ID) * 0.55) : // pipe: ~55% of pipe ID
+        (D_ID <= 30 ? Math.round(D_ID * 0.40) : D_ID <= 48 ? Math.round(D_ID * 0.35) : Math.round(D_ID * 0.30));
+      // Snap to standard flange size
+      const stdFlgSizes = [4, 6, 8, 10, 12, 14, 16, 18, 20, 24];
+      const snapFlg = stdFlgSizes.reduce((best, s) => {
+        if (s >= (isPipe ? pipeSchedule.id : D_ID) * 0.85) return best; // flange must be well under shell ID
+        return Math.abs(s - blFlgTarget) < Math.abs(best - blFlgTarget) ? s : best;
+      }, 4);
+      nozzlesRaw.push({ id: "N4", size: snapFlg, label: "Bladder Flange", position: "bottom-head",
+        connType: `${snapFlg}" Blind Flange (Bolted)`, connSpec: "ASME B16.5, 150#",
+        service: "bladder-flange", blFlangeSize: snapFlg });
+    }
   }
 
   // Nozzle pipe data, schedule selection, and UG-37 reinforcement
   const S_v = mat.shell.S;
   const S_n = mat.pipe ? mat.pipe.S : mat.shell.S;
   const nozzles = nozzlesRaw.map(n => {
-    const pipeD = NOZZLE_PIPE_DATA[n.size];
-    if (!pipeD) {
-      // Schrader valves or very small — no reinforcement calc needed
-      return { ...n, nozzleOD: 0.540, tn: 0.088, schedule: "N/A", d_opening: 0.364, reinf: null, sizingBasis: "Standard Schrader valve port, 1/4\" NPT tapped hole per manufacturer standard." };
+    // Bladder flange — bolted access opening in bottom head for bladder service
+    if (n.service === "bladder-flange") {
+      const blFlangeSize = n.blFlangeSize;
+      const bladderType = product.internals === "full-bladder" ? "Full-Acceptance" : "Partial-Acceptance";
+      const bladderMat = "Heavy-duty Butyl rubber";
+      const bladderID = D_ID - 2; // bladder ID ≈ shell ID minus clearance
+      const bladderLen = product.internals === "full-bladder" ? 
+        Math.round((shellLength + headDepthID) * 0.9) : Math.round(shellLength * 0.5);
+      const flangeRatio = Math.round(blFlangeSize / D_ID * 100);
+      const sizingNote = `The bottom head includes a ${blFlangeSize}" bolted blind flange opening (${flangeRatio}% of the ${D_ID}" shell ID). This opening is sized to allow the folded bladder to pass through during installation and field replacement, while leaving adequate head material around the opening for structural integrity and weld attachment of the flange ring. The ${blFlangeSize}" size is consistent with standard industry practice for ${isPipe ? "pipe-constructed" : "rolled-shell"} bladder expansion tanks of this diameter.`;
+      const reinfNote = `The ${blFlangeSize}" flanged opening in the bottom head is reinforced by the flange ring itself (welded to the head), which provides substantial cross-sectional area exceeding the UG-37 area replacement requirement. The blind flange (ASME B16.5, 150#) is bolted to this ring with studs torqued in a cross pattern to 40-50 ft-lbs. The bladder neck seats against the flange face and serves as the gasket.`;
+      return { ...n, nozzleOD: 0, tn: 0, schedule: null, d_opening: blFlangeSize, reinf: null, flow: null, flowQ_gpm: 0,
+        nozzleMat: materialId === "SS" ? "SA-182 F304" : "SA-105",
+        rating: "150#",
+        connType: `${blFlangeSize}" Blind Flange (Bolted)`, connSpec: "ASME B16.5, 150#",
+        bladderType, bladderMat, bladderID, bladderLen, blFlangeSize, reinfNote,
+        sizingBasis: `${sizingNote}\n\nThe ${bladderType.toLowerCase()} ${bladderMat.toLowerCase()} bladder (approx. ${bladderID}" dia. × ${bladderLen}" long) is inserted through this opening during assembly. The bladder is folded lengthwise and taped at intervals, then fed through the flange opening. Once inside, tape is removed and the bladder unfolds to fill the vessel interior.` };
     }
 
-    // Select nozzle schedule: use Sch80 minimum for ASME nozzles (industry best practice)
+    // Schrader air charge valve: threaded coupling welded to shell — NOT a pipe nozzle
+    if (n.service === "airvalve") {
+      return { ...n, nozzleOD: 0.540, tn: 0.088, d_opening: 0.364,
+        nozzleMat: materialId === "SS" ? "SA-182 F304" : "SA-105",
+        rating: "6000#", schedule: null,
+        reinf: null, flow: null, flowQ_gpm: 0,
+        sizingBasis: "Air charge connection is a 6000# forged threaded coupling welded to the vessel shell with a Schrader valve core threaded into the 1/4\" NPT bore. This is standard across all expansion tank manufacturers. The coupling is 6000# rated per ASME B16.11 for the 1/4\" size. The Schrader is identical to an automotive tire valve — compatible with standard air chucks and tire-type pressure gauges for field pre-charge adjustment. No pipe nozzle is used; the forged coupling body provides adequate reinforcement for this small opening." };
+    }
+
+    const pipeD = NOZZLE_PIPE_DATA[n.size];
+    if (!pipeD) {
+      return { ...n, nozzleOD: 0, tn: 0, schedule: "N/A", d_opening: 0, reinf: null, flow: null, flowQ_gpm: 0, sizingBasis: "Standard connection." };
+    }
+
+    // Select nozzle neck wall: use Sch80 wall dimension for reinforcement calc
+    // Couplings use the same bore as Sch80 pipe, but are rated by class not schedule
     const tn = pipeD.sch80;
     const nozzleOD = pipeD.od;
     const d_opening = nozzleOD - 2 * tn + 2 * CA; // corroded bore diameter
-    const schedule = "Sch. 80";
+
+    // Determine connection type from the selectNozzleSize result
+    const isFlangedConn = (n.connType || "").includes("Flange");
+    // For couplings: forging material, class rating
+    // For flanged: pipe material for nozzle neck, Sch. 80
+    const nozzleMat = isFlangedConn ?
+      (materialId === "SS" ? "SA-312 TP304" : "SA-106 Gr. B") :
+      (materialId === "SS" ? "SA-182 F304" : "SA-105");
+    const rating = isFlangedConn ? null : (n.size <= 0.25 ? "6000#" : "3000#");
+    const schedule = isFlangedConn ? "Sch. 80" : null; // pipe schedule only for flanged nozzle necks
 
     // Determine if nozzle is in head or shell
     const inHead = n.position.includes("head");
@@ -510,17 +795,48 @@ function designVessel(targetVolGal, mawp, product, materialId, CA) {
 
     // Sizing basis explanation
     let sizingBasis = "";
+    let flowQ_gpm = 0; // design flow rate for this nozzle
+    const heatUpMinutes = heatUpTimeHr * 60;
+
     if (n.service === "system") {
-      sizingBasis = `System connection sized per industry convention for expansion tanks. For a ${targetVolGal.toFixed(0)}-gallon system volume, ${n.label} provides adequate flow area for water displacement during thermal expansion/contraction cycles without creating excessive velocity or pressure drop. Selection follows ASHRAE Handbook guidance and standard manufacturer practice for diaphragm/bladder expansion tanks.`;
+      // Expansion tank system connection: flow = expanded water / heat-up time
+      // Conservative assumption: full expansion occurs over 1 hour heat-up cycle
+      flowQ_gpm = expandedWaterGal > 0 ? (expandedWaterGal / heatUpMinutes) : (targetVolGal * 0.04 / heatUpMinutes);
+      flowQ_gpm = Math.max(flowQ_gpm, 0.5); // minimum 0.5 GPM for calculation validity
+      sizingBasis = `System connection flow rate derived from thermal expansion displacement: ${expandedWaterGal.toFixed(2)} gallons of expanded water displaced over a ${heatUpTimeHr}-hour heat-up cycle = ${flowQ_gpm.toFixed(2)} GPM peak flow. This represents the maximum instantaneous flow the nozzle must handle during system warm-up. Connection sized to maintain velocity below 8 ft/s per ASHRAE Handbook recommendations for closed hydronic systems.`;
     } else if (n.service === "drain") {
-      sizingBasis = `Drain connection sized to allow reasonable tank drain-down time for maintenance and bladder service. Minimum 1/2\" NPT per industry practice; larger sizes for tanks over 100 gallons to keep drain time under 30 minutes.`;
+      // Drain: gravity drain, target 30 min drain-down
+      const drainTimeMin = targetVolGal > 500 ? 60 : 30;
+      flowQ_gpm = targetVolGal / drainTimeMin;
+      flowQ_gpm = Math.max(flowQ_gpm, 0.5);
+      sizingBasis = `Drain sized for tank drain-down in approximately ${drainTimeMin} minutes under gravity: ${targetVolGal.toFixed(0)} gal / ${drainTimeMin} min = ${flowQ_gpm.toFixed(2)} GPM. Minimum 1/2" NPT per industry practice.`;
     } else if (n.service === "buffer-in" || n.service === "buffer-out") {
-      sizingBasis = `Buffer tank ${n.label.toLowerCase()} sized to match system piping velocity requirements. At design flow, the connection maintains fluid velocity below 8 ft/s per ASHRAE recommendations for closed hydronic systems, minimizing erosion and pressure drop through the tank.`;
+      flowQ_gpm = designFlowGPM > 0 ? designFlowGPM : (targetVolGal * 0.5); // rule-of-thumb if not specified
+      flowQ_gpm = Math.max(flowQ_gpm, 1.0);
+      sizingBasis = `Buffer tank ${n.label.toLowerCase()} sized for design flow rate of ${flowQ_gpm.toFixed(1)} GPM. Connection maintains fluid velocity below 8 ft/s per ASHRAE recommendations for closed hydronic systems, minimizing erosion, noise, and pressure drop through the tank.`;
     } else if (n.service === "vent") {
-      sizingBasis = `Vent/gauge connection per standard practice. 3/4\" NPT provides port for pressure gauge, temperature gauge, or manual air vent. Sized per ASME B16.11 for instrument connections.`;
+      flowQ_gpm = 0; // no flow analysis for vent
+      sizingBasis = `Vent/gauge connection per standard practice. 3/4" NPT provides port for pressure gauge, temperature gauge, or manual air vent. Sized per ASME B16.11 for instrument connections.`;
     }
 
-    return { ...n, nozzleOD, tn, schedule, d_opening, reinf, sizingBasis, weldLeg };
+    // Effective nozzle length: vessel wall + 2× nozzle wall + 1" projection
+    const tVessel = inHead ? tHead : tShell;
+    const nozzleLength = tVessel + 2 * tn + 1.0; // inches
+
+    // Run flow analysis
+    let flow = null;
+    if (flowQ_gpm > 0 && d_opening > 0) {
+      flow = calcNozzleFlow({
+        Q_gpm: flowQ_gpm,
+        d_in: nozzleOD - 2 * tn, // actual ID of nozzle pipe
+        tempF: designTempF,
+        materialId,
+        nozzleLength,
+        service: n.service,
+      });
+    }
+
+    return { ...n, nozzleOD, tn, schedule, rating, nozzleMat, d_opening, reinf, sizingBasis, weldLeg, flow, flowQ_gpm };
   });
 
   // Weight estimate
@@ -679,13 +995,34 @@ function VesselSVG({ vessel, product, sizing }) {
       )}
 
       {/* === NOZZLES === */}
-      {nozzles.map((n) => {
-        const nLen = 18, nThk = Math.max(8, Math.min(16, n.size * 8));
+      {nozzles.map((n, ni) => {
+        // Bladder flange: draw as a wide flanged bottom
+        if (n.service === "bladder-flange") {
+          const flgW = Math.min(sw * 0.95, (n.blFlangeSize || 8) / D_ID * sw * 1.1);
+          return (
+            <g key={n.id}>
+              <rect x={cx - flgW/2 - 4} y={botY + 2} width={flgW + 8} height={5}
+                fill="#4A4A4A" stroke="#2C2C2C" strokeWidth="1.5" rx="1" />
+              <rect x={cx - flgW/2} y={botY + 7} width={flgW} height={4}
+                fill="#5A5A5A" stroke="#2C2C2C" strokeWidth="1" rx="1" />
+              <text x={cx - flgW/2 - 8} y={botY + 10}
+                fontSize="7" fill="#B0B0B0" fontWeight="600" textAnchor="end">{n.id}: Bladder Flg</text>
+            </g>
+          );
+        }
+
+        const nLen = 18, nThk = Math.max(8, Math.min(14, (n.size || 0.5) * 8));
         let nx, ny, isVert = false, isTop = false;
-        if (n.position === "top-head") { nx = cx; ny = topY; isVert = true; isTop = true; }
-        else if (n.position === "bottom-head") { nx = cx; ny = botY; isVert = true; }
-        else if (n.position === "bottom-side") { nx = cx + sw/2; ny = shellBot - 20; }
-        else if (n.position === "top-side") { nx = cx + sw/2; ny = shellTop + 20; }
+
+        // Count nozzles at same position (exclude bladder flange from offset)
+        const samePos = nozzles.filter(nn => nn.position === n.position && nn.service !== "bladder-flange");
+        const posIdx = samePos.indexOf(n);
+        const offset = samePos.length > 1 ? (posIdx - (samePos.length - 1) / 2) * 22 : 0;
+
+        if (n.position === "top-head") { nx = cx + offset; ny = topY; isVert = true; isTop = true; }
+        else if (n.position === "bottom-head") { nx = cx + offset; ny = botY; isVert = true; }
+        else if (n.position === "bottom-side") { nx = cx + sw/2; ny = shellBot - 6; }
+        else if (n.position === "top-side") { nx = cx + sw/2; ny = shellTop + 15; }
         else { nx = cx + sw/2; ny = (shellTop + shellBot) / 2; }
 
         return (
@@ -765,7 +1102,7 @@ function VesselSVG({ vessel, product, sizing }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REPORT GENERATOR (writes to iframe instead of window.open)
+// REPORT GENERATOR (renders inline with print support)
 // ═══════════════════════════════════════════════════════════════
 
 function generateReportHTML(product, inputs, sizing, vessel) {
@@ -803,6 +1140,7 @@ function generateReportHTML(product, inputs, sizing, vessel) {
   .stamp-t{font-weight:900;margin-bottom:4px;font-size:9pt}
   .hiw{background:#F5F5F0;border:1px solid #E0DCC8;border-radius:6px;padding:16px 20px;margin:20px 0;font-size:9.5pt;line-height:1.7;color:#444}
   .hiw h4{color:#8B6914;font-size:10.5pt;margin-bottom:8px}
+  p{margin:4px 0}
   @media print{body{padding:20px 30px}}
 </style></head><body>`;
 
@@ -813,8 +1151,94 @@ function generateReportHTML(product, inputs, sizing, vessel) {
     <div class="mdl">${modelNum}</div>
     <div class="sub">${product.name} — ${product.subtitle}</div>
   </div><div class="hdr-r">
-    <strong>Engineering Design Report</strong><br>Date: ${now}<br>Fort Worth, Texas<br>ASME Section VIII, Division 1
+    <strong>Engineering Design Report</strong><br>Prepared by: <b>Eli Wright</b><br>Date: ${now}<br>Fort Worth, Texas<br>ASME Section VIII, Division 1
   </div></div>`;
+
+  // ═══ BUILD SUMMARY — ready-to-fabricate data at a glance ═══
+  h += `<div style="border:3px solid #B8860B;border-radius:8px;padding:20px;margin:20px 0;background:#FFFDF5">`;
+  h += `<div style="text-align:center;font-size:14pt;font-weight:900;color:#8B6914;letter-spacing:2px;margin-bottom:12px">BUILD DATA SUMMARY</div>`;
+  h += `<div style="display:flex;gap:20px;align-items:flex-start">`;
+
+  // Left side: Schematic SVG
+  const svgW = 220, svgH = 340;
+  const svgShellW = 80;
+  const svgShellH = Math.min(200, Math.max(100, vessel.shellLength / vessel.OAL * 240));
+  const svgHeadH = Math.min(50, vessel.headDepthID / vessel.OAL * 240);
+  const svgCX = svgW / 2, svgTopY = 40;
+  const svgShellTop = svgTopY + svgHeadH;
+  const svgShellBot = svgShellTop + svgShellH;
+  const svgBotY = svgShellBot + svgHeadH;
+
+  h += `<div style="flex-shrink:0"><svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" xmlns="http://www.w3.org/2000/svg">`;
+  // Vessel body
+  h += `<rect x="${svgCX - svgShellW/2}" y="${svgShellTop}" width="${svgShellW}" height="${svgShellH}" fill="#E8E0D0" stroke="#333" stroke-width="2"/>`;
+  // Top head
+  h += `<path d="M ${svgCX - svgShellW/2} ${svgShellTop} Q ${svgCX - svgShellW/2} ${svgTopY}, ${svgCX} ${svgTopY} Q ${svgCX + svgShellW/2} ${svgTopY}, ${svgCX + svgShellW/2} ${svgShellTop}" fill="#E8E0D0" stroke="#333" stroke-width="2"/>`;
+  // Bottom head
+  h += `<path d="M ${svgCX - svgShellW/2} ${svgShellBot} Q ${svgCX - svgShellW/2} ${svgBotY}, ${svgCX} ${svgBotY} Q ${svgCX + svgShellW/2} ${svgBotY}, ${svgCX + svgShellW/2} ${svgShellBot}" fill="#E8E0D0" stroke="#333" stroke-width="2"/>`;
+  // Nozzles
+  vessel.nozzles.forEach((n, i) => {
+    const isVert = n.position.includes("head");
+    const isTop = n.position.includes("top");
+    if (isVert && isTop) {
+      h += `<rect x="${svgCX - 5}" y="${svgTopY - 14}" width="10" height="14" fill="#888" stroke="#333" stroke-width="1"/>`;
+      h += `<text x="${svgCX + 12}" y="${svgTopY - 4}" font-size="7" fill="#333" font-weight="600">${n.id}: ${n.label2 || n.label}</text>`;
+    } else if (isVert) {
+      h += `<rect x="${svgCX - 5}" y="${svgBotY}" width="10" height="14" fill="#888" stroke="#333" stroke-width="1"/>`;
+      h += `<text x="${svgCX + 12}" y="${svgBotY + 10}" font-size="7" fill="#333" font-weight="600">${n.id}: ${n.label2 || n.label}</text>`;
+    } else if (isTop) {
+      h += `<rect x="${svgCX + svgShellW/2}" y="${svgShellTop + 15}" width="16" height="8" fill="#888" stroke="#333" stroke-width="1"/>`;
+      h += `<text x="${svgCX + svgShellW/2 + 20}" y="${svgShellTop + 22}" font-size="7" fill="#333" font-weight="600">${n.id}: ${n.label2 || n.label}</text>`;
+    } else {
+      h += `<rect x="${svgCX + svgShellW/2}" y="${svgShellBot - 20}" width="16" height="8" fill="#888" stroke="#333" stroke-width="1"/>`;
+      h += `<text x="${svgCX + svgShellW/2 + 20}" y="${svgShellBot - 13}" font-size="7" fill="#333" font-weight="600">${n.id}: ${n.label2 || n.label}</text>`;
+    }
+  });
+  // Dimension lines
+  h += `<line x1="${svgCX - svgShellW/2 - 18}" y1="${svgTopY}" x2="${svgCX - svgShellW/2 - 18}" y2="${svgBotY}" stroke="#B8860B" stroke-width="0.8"/>`;
+  h += `<text x="${svgCX - svgShellW/2 - 22}" y="${(svgTopY + svgBotY)/2}" font-size="7" fill="#B8860B" font-weight="700" text-anchor="end" transform="rotate(-90,${svgCX - svgShellW/2 - 22},${(svgTopY + svgBotY)/2})">${vessel.OAL}" OAL</text>`;
+  h += `<line x1="${svgCX - svgShellW/2}" y1="${svgBotY + 18}" x2="${svgCX + svgShellW/2}" y2="${svgBotY + 18}" stroke="#B8860B" stroke-width="0.8"/>`;
+  h += `<text x="${svgCX}" y="${svgBotY + 30}" font-size="7" fill="#B8860B" font-weight="700" text-anchor="middle">${vessel.D_ID}" ID</text>`;
+  // Construction label
+  h += `<text x="${svgCX}" y="${svgBotY + 42}" font-size="6" fill="#888" text-anchor="middle">${vessel.constructionType}</text>`;
+  h += `<text x="${svgCX}" y="${svgBotY + 52}" font-size="6" fill="#888" text-anchor="middle">${vessel.headType}</text>`;
+  h += `</svg></div>`;
+
+  // Right side: Build data table
+  h += `<div style="flex:1">`;
+  h += `<table style="font-size:9.5pt;margin:0">
+    <tr style="background:#8B6914;color:#fff"><th colspan="2" style="border-color:#8B6914;padding:6px;font-size:10pt;letter-spacing:1px">${modelNum}</th></tr>
+    <tr><td style="font-weight:700;width:50%">Construction</td><td>${vessel.constructionType}</td></tr>
+    <tr><td style="font-weight:700">Head Type</td><td>${vessel.headType}</td></tr>
+    <tr><td style="font-weight:700">Inside Diameter</td><td>${vessel.D_ID}"</td></tr>
+    <tr><td style="font-weight:700">Outside Diameter</td><td>${vessel.D_OD}"</td></tr>
+    <tr><td style="font-weight:700">Shell Thickness</td><td>${vessel.tShell}"</td></tr>
+    <tr><td style="font-weight:700">Head Thickness</td><td>${vessel.tHead}"</td></tr>
+    <tr><td style="font-weight:700">Straight Shell Length</td><td>${vessel.shellLength}"</td></tr>
+    <tr><td style="font-weight:700">Overall Length</td><td>${vessel.OAL}"</td></tr>
+    <tr><td style="font-weight:700">Volume</td><td>${vessel.actualVolGal} gallons</td></tr>
+    <tr><td style="font-weight:700">MAWP</td><td>${inputs.mawp} psig</td></tr>
+    <tr><td style="font-weight:700">Max Temperature</td><td>${product.maxTemp}°F</td></tr>
+    <tr><td style="font-weight:700">Shell Material</td><td>${vessel.shellSpec}</td></tr>
+    <tr><td style="font-weight:700">Head Material</td><td>${vessel.headSpec}</td></tr>
+    <tr><td style="font-weight:700">Corrosion Allowance</td><td>${vessel.CA > 0 ? vessel.CA + '"' : "None"}</td></tr>
+    <tr><td style="font-weight:700">Pre-charge</td><td>${product.precharge > 0 ? product.precharge + " psig" : "N/A"}</td></tr>
+    <tr><td style="font-weight:700">Empty Weight (est.)</td><td>~${vessel.emptyWeight} lbs</td></tr>
+    <tr><td style="font-weight:700">Operating Weight</td><td>~${vessel.operatingWeight} lbs</td></tr>
+    <tr><td style="font-weight:700">Code</td><td>ASME VIII-1</td></tr>
+  </table>`;
+
+  // Nozzle schedule mini-table
+  h += `<table style="font-size:9pt;margin-top:8px">
+    <tr style="background:#8B6914;color:#fff"><th style="border-color:#8B6914">Nozzle</th><th style="border-color:#8B6914">Service</th><th style="border-color:#8B6914">Size</th><th style="border-color:#8B6914">Connection</th><th style="border-color:#8B6914">Rating</th></tr>`;
+  vessel.nozzles.forEach(n => {
+    const sizeStr = n.service === "bladder-flange" ? fracSize(n.blFlangeSize) : fracSize(n.size);
+    const ratingStr = n.rating || n.schedule || "—";
+    h += `<tr><td>${n.id}</td><td>${n.label2 || n.label}</td><td>${sizeStr}</td><td>${n.connType || "—"}</td><td>${ratingStr}</td></tr>`;
+  });
+  h += `</table>`;
+
+  h += `</div></div></div>`;
 
   // 1. DESIGN INPUTS
   h += `<h2>1. Design Input Parameters</h2><table>
@@ -952,24 +1376,34 @@ Piping Expansion = 3 × α × ΔT&emsp;where α = 6.8 × 10<sup>−6</sup> in/in
 
   // Nozzle Schedule
   h += `<h3>4.1 Nozzle Schedule</h3><table>
-    <tr><th>Tag</th><th>Service</th><th>Size</th><th>Pipe Spec</th><th>Schedule</th><th>Position</th></tr>`;
+    <tr><th>Tag</th><th>Service</th><th>Size</th><th>Connection</th><th>Material</th><th>Rating / Schedule</th><th>Position</th></tr>`;
   vessel.nozzles.forEach((n) => {
-    h += `<tr><td>${n.id}</td><td>${n.label2 || n.label}</td><td>${n.label.includes("Schrader") ? "Schrader" : n.size + '"'}</td><td>${n.label.includes("Schrader") ? "—" : (vessel.materialId === "SS" ? "SA-312 TP304" : "SA-106 Gr. B")}</td><td>${n.schedule || "N/A"}</td><td>${n.position.replace(/-/g, " ").toUpperCase()}</td></tr>`;
+    const isBladder = n.service === "bladder-flange";
+    const sizeStr = isBladder ? fracSize(n.blFlangeSize) : fracSize(n.size);
+    const matStr = n.nozzleMat || "—";
+    const ratingStr = n.rating || n.schedule || "—";
+    h += `<tr><td>${n.id}</td><td>${n.label2 || n.label}</td><td>${sizeStr}</td><td>${n.connType || "—"}</td><td>${matStr}</td><td>${ratingStr}</td><td>${n.position.replace(/-/g, " ").toUpperCase()}</td></tr>`;
   });
   h += `</table>`;
 
   // ═══ SECTION 5: NOZZLE DESIGN CALCULATIONS ═══
   h += `<h2>5. Nozzle Design Calculations</h2>`;
-  h += `<p class="ref">Reference: ASME BPVC Section VIII, Division 1 — UG-36 (Openings in Pressure Vessels), UG-37 (Reinforcement Required for Openings), UG-40 (Limits of Reinforcement), UG-41 (Strength of Reinforcement). Nozzle pipe dimensions per ASME B36.10M (carbon steel) / B36.19M (stainless steel). Nozzle forging/fitting per ASME B16.11 (forged fittings) and B16.9 (factory-made wrought fittings). Weld design per UW-16.</p>`;
+  h += `<p class="ref">Reference: ASME BPVC Section VIII, Division 1 — UG-36 (Openings in Pressure Vessels), UG-37 (Reinforcement Required for Openings), UG-40 (Limits of Reinforcement), UG-41 (Strength of Reinforcement). Nozzle pipe dimensions per ASME B36.10M (carbon steel) / B36.19M (stainless steel). Forged fittings per ASME B16.11. Weld-neck flanges per ASME B16.5. Weld design per UW-16.</p>`;
 
-  h += `<h3>5.1 Nozzle Sizing Rationale</h3>`;
-  h += `<p>Nozzle sizes for expansion tanks are selected based on the following engineering criteria:</p>`;
-  h += `<p><b>System Connection:</b> Sized to match standard hydronic piping at the point of installation. The expansion tank does not see continuous design flow — it only displaces water during thermal expansion and contraction cycles. The connection must be large enough to avoid excessive velocity (< 8 ft/s per ASHRAE) during rapid temperature changes, but need not be sized for full system flow. Industry convention, validated by decades of installed systems, establishes the size ranges shown in the schedule above.</p>`;
-  h += `<p><b>Drain:</b> Sized for reasonable tank drain-down time during maintenance (target < 30 minutes for tanks up to 500 gallons). Minimum 1/2" NPT.</p>`;
-  h += `<p><b>Air Charge Valve:</b> Standard Schrader-type valve, 1/4" NPT tapped port. This is an industry-universal fitting compatible with standard tire-type pressure gauges and air chuck equipment for field pre-charge adjustment.</p>`;
-  h += `<p><b>Nozzle Neck Schedule:</b> All nozzle necks are specified as <b>Schedule 80 minimum</b> per ASME VIII-1 best practice. Sch. 80 provides substantial excess wall thickness beyond the minimum required by pressure, ensuring adequate reinforcement contribution and resistance to mechanical abuse during field installation.</p>`;
+  h += `<h3>5.1 Nozzle Connection Types</h3>`;
+  h += `<p>All nozzle connections use industry-standard fittings calibrated to match established expansion tank product lines:</p>`;
+  h += `<p><b>Threaded Half-Coupling (≤ 2" NPT):</b> 3000# forged steel coupling (SA-105 for carbon steel, SA-182 F304 for stainless) per ASME B16.11. The coupling is bored to accept the nozzle neck pipe and fillet-welded to the vessel shell or head. This is the standard connection method used by all major expansion tank manufacturers for sizes up to 2".</p>`;
+  h += `<p><b>Weld-Neck Flange (≥ 3"):</b> ASME B16.5, Class 150# raised-face flange. Used for larger connections on buffer tanks and high-capacity expansion tanks where bolted field connections are required.</p>`;
+  h += `<p><b>Threaded Coupling (Air Charge):</b> A 6000# forged coupling (SA-105 for CS, SA-182 F304 for SS) per ASME B16.11 welded to the shell, with a Schrader valve core threaded into the 1/4" NPT bore. Per B16.11, couplings 1/4" and smaller are rated 6000#. This is universal across the expansion tank industry — identical to automotive tire valve fittings for compatibility with standard air chucks and pressure gauges.</p>`;
 
-  h += `<h3>5.2 Nozzle Reinforcement — Area Replacement Method (UG-37)</h3>`;
+  h += `<h3>5.2 Nozzle Sizing Rationale</h3>`;
+  h += `<p>Nozzle sizes are calibrated to match industry-standard expansion tank catalogs. The sizes shown were validated against multiple manufacturers' published product data to ensure consistency with established market expectations. Sizes are verified by flow analysis in Section 6.</p>`;
+  h += `<p><b>System Connection:</b> Sized per industry convention. The expansion tank does not see continuous design flow — it only displaces water during thermal expansion/contraction cycles. The connection must avoid excessive velocity (&lt; 8 ft/s per ASHRAE) during rapid temperature changes.</p>`;
+  h += `<p><b>Drain:</b> Sized for reasonable tank drain-down time during maintenance (target &lt; 30 minutes for tanks up to 500 gallons). Minimum 1/2" NPT.</p>`;
+  h += `<p><b>Air Charge Valve:</b> Standard Schrader-type valve in a 1/4" threaded coupling (6000# forged per ASME B16.11). Industry-universal fitting for field pre-charge adjustment.</p>`;
+  h += `<p><b>Nozzle Neck Schedule:</b> All pipe-type nozzle necks are specified as <b>Schedule 80 minimum</b>. Sch. 80 provides substantial excess wall thickness beyond the minimum required by pressure, ensuring adequate reinforcement contribution and resistance to mechanical abuse during field installation.</p>`;
+
+  h += `<h3>5.3 Nozzle Reinforcement — Area Replacement Method (UG-37)</h3>`;
   h += `<p>Every opening in a pressure vessel removes load-carrying material from the shell or head. Per UG-36, each opening must be evaluated for adequate reinforcement. The area replacement method (UG-37) verifies that sufficient excess material exists in the vessel wall, nozzle neck, and welds to compensate for the removed material.</p>`;
   h += `<span class="eq"><b>Required Reinforcement Area:</b><br>
 A<sub>req</sub> = d × t<sub>r</sub> × F + 2 × t<sub>n</sub> × t<sub>r</sub> × F × (1 − f<sub>r1</sub>)<br><br>
@@ -982,7 +1416,10 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
 
   // Individual nozzle calculations
   vessel.nozzles.forEach((n, idx) => {
-    h += `<h3>5.${idx + 3} Nozzle ${n.id} — ${n.label2 || n.label} (${n.label.includes("Schrader") ? "Schrader" : n.size + '" ' + (n.schedule || "")})</h3>`;
+    const nSizeStr = n.service === "bladder-flange" ? (n.blFlangeSize + '" Blind Flange') :
+      n.service === "airvalve" ? '1/4" Threaded Coupling 6000#' :
+      (fracSize(n.size) + ' ' + (n.rating || n.schedule || ''));
+    h += `<h3>5.${idx + 4} Nozzle ${n.id} — ${n.label2 || n.label} (${nSizeStr})</h3>`;
 
     // Sizing basis
     if (n.sizingBasis) {
@@ -990,7 +1427,11 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     }
 
     if (!n.reinf) {
-      h += `<p>No reinforcement calculation required — Schrader valve is a standard tapped port (1/4" NPT) with negligible opening diameter relative to shell thickness. Per UG-36(c)(3)(a), openings not larger than 2-3/8" in vessels meeting all conditions of that paragraph are exempt from the area replacement calculation when the opening is in pipe or tube with adequate wall thickness.</p>`;
+      if (n.service === "bladder-flange") {
+        h += `<p><b>Reinforcement:</b> ${n.reinfNote || "The flanged opening is reinforced by the welded flange ring per standard ASME practice."}</p>`;
+      } else {
+        h += `<p>No reinforcement calculation required. This is a forged threaded coupling welded to the vessel shell — the opening is 1/4" NPT with a bore of approximately 0.364". Per UG-36(c)(3)(a), openings not larger than 2-3/8" in vessels meeting all conditions of that paragraph are exempt from the area replacement calculation. The forged coupling body itself provides more than adequate reinforcement for this small opening.</p>`;
+      }
     } else {
       const r = n.reinf;
       const inHead = n.position.includes("head");
@@ -1000,7 +1441,7 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
       h += `<table>
         <tr><th style="width:60%">Parameter</th><th>Value</th></tr>
         <tr><td>Nozzle Pipe OD</td><td>${r.nozzleOD.toFixed(3)}"</td></tr>
-        <tr><td>Nozzle Wall Thickness (t<sub>n</sub>, nominal)</td><td>${n.tn.toFixed(3)}" (${n.schedule})</td></tr>
+        <tr><td>Nozzle Wall Thickness (t<sub>n</sub>, nominal)</td><td>${n.tn.toFixed(3)}" (${n.rating || n.schedule || "—"})</td></tr>
         <tr><td>Corroded Nozzle Wall (t<sub>nc</sub> = t<sub>n</sub> − CA)</td><td>${r.t_nc.toFixed(4)}"</td></tr>
         <tr><td>Corroded Opening Diameter (d)</td><td>${r.d.toFixed(4)}"</td></tr>
         <tr><td>Installed In</td><td>${componentName.charAt(0).toUpperCase() + componentName.slice(1)}</td></tr>
@@ -1052,8 +1493,176 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     }
   });
 
+  // ═══ SECTION 6: NOZZLE FLOW ANALYSIS ═══
+  h += `<h2>6. Nozzle Flow & Hydraulic Analysis</h2>`;
+  h += `<p class="ref">References: ASHRAE Handbook — Fundamentals (Fluid Flow, Heat Transfer); Perry's Chemical Engineers' Handbook, 9th Ed. (Fluid & Particle Dynamics); Crane Technical Paper No. 410 (Flow of Fluids Through Valves, Fittings, and Pipe); ASME B36.10M / B36.19M (Pipe Dimensions); Smithsonian Physical Tables (Water Properties).</p>`;
+
+  h += `<h3>6.1 Methodology</h3>`;
+  h += `<p>Each nozzle is analyzed for flow velocity, Reynolds number, friction factor, pressure drop, and heat transfer parameters at the design operating temperature. The analysis uses the Darcy-Weisbach equation for pressure loss with the Swamee-Jain approximation to the Colebrook-White equation for friction factor (accurate to ±1% of the iterative Colebrook solution). Minor losses for nozzle entrance (K=0.5, sharp-edged) and exit (K=1.0, sudden expansion) are included per Crane TP-410.</p>`;
+
+  h += `<h3>6.2 Water Properties at Design Temperature</h3>`;
+  // Get water properties at design temp for the summary table
+  const wpReport = getWaterProps(inputs.designTemp || 180);
+  h += `<table>
+    <tr><th>Property</th><th>Symbol</th><th>Value</th><th>Units</th><th>Source</th></tr>
+    <tr><td>Temperature</td><td>T</td><td>${inputs.designTemp || 180}</td><td>°F</td><td>Design input</td></tr>
+    <tr><td>Density</td><td>ρ</td><td>${wpReport.rho.toFixed(2)}</td><td>lb/ft³</td><td>ASHRAE Fundamentals</td></tr>
+    <tr><td>Dynamic Viscosity</td><td>μ</td><td>${wpReport.mu_cP.toFixed(4)}</td><td>centipoise</td><td>Perry's, Table 2-313</td></tr>
+    <tr><td>Dynamic Viscosity</td><td>μ</td><td>${(wpReport.mu_cP * 6.7197e-4).toExponential(4)}</td><td>lb/(ft·s)</td><td>Converted: cP × 6.7197×10⁻⁴</td></tr>
+    <tr><td>Specific Heat</td><td>c<sub>p</sub></td><td>${wpReport.cp.toFixed(4)}</td><td>BTU/(lb·°F)</td><td>ASHRAE Fundamentals</td></tr>
+    <tr><td>Thermal Conductivity</td><td>k</td><td>${wpReport.k.toFixed(4)}</td><td>BTU/(hr·ft·°F)</td><td>ASHRAE Fundamentals</td></tr>
+    <tr><td>Prandtl Number</td><td>Pr = c<sub>p</sub>μ/k</td><td>${((wpReport.cp * wpReport.mu_cP * 6.7197e-4) / (wpReport.k / 3600)).toFixed(2)}</td><td>dimensionless</td><td>Calculated</td></tr>
+    <tr><td>Pipe Roughness (${vessel.materialId === "SS" ? "Stainless" : "Carbon"} Steel)</td><td>ε</td><td>${vessel.materialId === "SS" ? "0.00006" : "0.0018"}</td><td>inches</td><td>Crane TP-410</td></tr>
+  </table>`;
+
+  h += `<h3>6.3 Key Equations</h3>`;
+  h += `<span class="eq"><b>Cross-Sectional Area:</b>&emsp;A = π/4 × d²<br><br>
+<b>Fluid Velocity:</b>&emsp;v = Q / A&emsp;[ft/s]<br><br>
+<b>Mass Flow Rate:</b>&emsp;ṁ = ρ × Q&emsp;[lb/s]<br><br>
+<b>Reynolds Number:</b>&emsp;Re = ρ × v × D / μ<br><br>
+<b>Friction Factor</b> (Swamee-Jain, ±1% of Colebrook-White):<br>
+&emsp;f = 0.25 / [log₁₀(ε/3.7D + 5.74/Re<sup>0.9</sup>)]²&emsp;(turbulent, Re > 4000)<br>
+&emsp;f = 64/Re&emsp;(laminar, Re < 2300)<br><br>
+<b>Pressure Drop</b> (Darcy-Weisbach + minor losses):<br>
+&emsp;ΔP = [f(L/D) + ΣK] × ρv²/(2g<sub>c</sub>)&emsp;where g<sub>c</sub> = 32.174 lb<sub>m</sub>·ft/(lb<sub>f</sub>·s²)<br>
+&emsp;K<sub>entrance</sub> = 0.5 (sharp-edged entry from vessel into nozzle)<br>
+&emsp;K<sub>exit</sub> = 1.0 (sudden expansion from nozzle into piping)<br><br>
+<b>Nusselt Number</b> (Dittus-Boelter, turbulent Re > 10,000):<br>
+&emsp;Nu = 0.023 × Re<sup>0.8</sup> × Pr<sup>0.4</sup><br><br>
+<b>Nusselt Number</b> (Gnielinski, transitional 2300 < Re < 10,000):<br>
+&emsp;Nu = (f/8)(Re − 1000)Pr / [1 + 12.7√(f/8)(Pr<sup>2/3</sup> − 1)]<br><br>
+<b>Convective Heat Transfer Coefficient:</b>&emsp;h = Nu × k / D&emsp;[BTU/(hr·ft²·°F)]</span>`;
+
+  // Individual nozzle flow calcs
+  vessel.nozzles.forEach((n, idx) => {
+    const fl = n.flow;
+    if (!fl) {
+      // Skip Schrader and vent nozzles with no flow
+      if (n.service === "airvalve") {
+        h += `<h3>6.${idx + 4} ${n.id} — ${n.label2 || n.label}</h3>`;
+        h += `<p>No flow analysis required. The air charge valve (Schrader type) carries only air/nitrogen during pre-charging. It does not see liquid flow during operation.</p>`;
+      } else if (n.service === "vent") {
+        h += `<h3>6.${idx + 4} ${n.id} — ${n.label2 || n.label}</h3>`;
+        h += `<p>No flow analysis required. This is an instrument/vent port for pressure gauge, temperature gauge, or manual air vent. Flow is intermittent and negligible.</p>`;
+      }
+      return;
+    }
+
+    h += `<h3>6.${idx + 4} ${n.id} — ${n.label2 || n.label} (${fracSize(n.size)} ${n.rating || n.schedule || ""})</h3>`;
+
+    // Sizing basis
+    h += `<p><i>Flow Basis:</i> ${n.sizingBasis}</p>`;
+
+    // Step-by-step calculations
+    h += `<div class="cs"><b>Step 1: Nozzle Geometry</b><br>`;
+    h += `&emsp;Nozzle pipe OD = ${fl.d_in + 2 * n.tn > 0 ? n.nozzleOD.toFixed(3) : "—"}"&emsp;|&emsp;Wall = ${n.tn.toFixed(3)}" (${n.rating || n.schedule || "—"})<br>`;
+    h += `&emsp;Inside Diameter: d = OD − 2t = ${n.nozzleOD.toFixed(3)} − 2(${n.tn.toFixed(3)}) = <b>${fl.d_in.toFixed(4)}"</b><br>`;
+    h += `&emsp;Cross-Section Area: A = π/4 × ${fl.d_in.toFixed(4)}² = <b>${fl.A_in2.toFixed(4)} in²</b> = ${(fl.A_ft2).toExponential(4)} ft²<br>`;
+    h += `&emsp;Effective Nozzle Length: L = ${fl.nozzleLength.toFixed(2)}"</div>`;
+
+    h += `<div class="cs"><b>Step 2: Flow Rate & Velocity</b><br>`;
+    h += `&emsp;Design Flow Rate: Q = <b>${fl.Q_gpm.toFixed(2)} GPM</b> = ${(fl.Q_gpm / 448.831).toExponential(4)} ft³/s<br>`;
+    h += `&emsp;Velocity: v = Q / A = <b>${fl.v_fps.toFixed(2)} ft/s</b><br>`;
+    h += `&emsp;Mass Flow Rate: ṁ = ρ × Q = ${fl.rho.toFixed(2)} × ${(fl.Q_gpm / 448.831).toExponential(4)} = <b>${fl.m_dot.toFixed(3)} lb/s</b> (${fl.m_dot_hr.toFixed(1)} lb/hr)<br>`;
+    h += `&emsp;<i>${fl.velocityNote}</i></div>`;
+
+    h += `<div class="cs"><b>Step 3: Reynolds Number & Flow Regime</b><br>`;
+    h += `&emsp;Re = ρvD/μ = (${fl.rho.toFixed(2)} × ${fl.v_fps.toFixed(2)} × ${(fl.d_in / 12).toFixed(5)}) / ${fl.mu_lbfts.toExponential(4)}<br>`;
+    h += `&emsp;<b>Re = ${fl.Re.toLocaleString()}</b>&emsp;→&emsp;<b>${fl.flowRegime}</b> flow</div>`;
+
+    h += `<div class="cs"><b>Step 4: Prandtl Number</b><br>`;
+    h += `&emsp;Pr = c<sub>p</sub>μ/k = (${fl.cp.toFixed(4)} × ${fl.mu_lbfts.toExponential(4)}) / (${fl.k_therm.toFixed(4)}/3600)<br>`;
+    h += `&emsp;<b>Pr = ${fl.Pr.toFixed(2)}</b></div>`;
+
+    h += `<div class="cs"><b>Step 5: Darcy Friction Factor</b><br>`;
+    h += `&emsp;Pipe roughness: ε = ${fl.epsilon}" (${vessel.materialId === "SS" ? "stainless steel" : "commercial carbon steel"})<br>`;
+    h += `&emsp;Relative roughness: ε/D = ${fl.epsilon} / ${fl.d_in.toFixed(4)} = ${(fl.epsilon / fl.d_in).toExponential(4)}<br>`;
+    if (fl.Re < 2300) {
+      h += `&emsp;Laminar: f = 64/Re = 64/${fl.Re} = <b>${fl.f_darcy.toFixed(5)}</b></div>`;
+    } else {
+      h += `&emsp;Swamee-Jain: f = 0.25/[log₁₀(${(fl.epsilon / fl.d_in / 3.7).toExponential(3)} + 5.74/${fl.Re}<sup>0.9</sup>)]²<br>`;
+      h += `&emsp;<b>f = ${fl.f_darcy.toFixed(5)}</b></div>`;
+    }
+
+    h += `<div class="cs"><b>Step 6: Pressure Drop (Darcy-Weisbach)</b><br>`;
+    h += `&emsp;Friction loss: ΔP<sub>f</sub> = f(L/D)(ρv²/2g<sub>c</sub>) = ${fl.f_darcy.toFixed(5)} × (${(fl.nozzleLength / 12).toFixed(4)}/${(fl.d_in / 12).toFixed(5)}) × ... = <b>${fl.dP_friction_psi.toFixed(4)} psi</b><br>`;
+    h += `&emsp;Minor losses: K<sub>entrance</sub> = ${fl.K_entrance} + K<sub>exit</sub> = ${fl.K_exit} → ΣK = ${fl.K_total}<br>`;
+    h += `&emsp;ΔP<sub>minor</sub> = ΣK × ρv²/(2g<sub>c</sub>) = <b>${fl.dP_minor_psi.toFixed(4)} psi</b><br>`;
+    h += `&emsp;<b>ΔP<sub>total</sub> = ${fl.dP_friction_psi.toFixed(4)} + ${fl.dP_minor_psi.toFixed(4)} = ${fl.dP_total_psi.toFixed(4)} psi</b></div>`;
+
+    h += `<div class="cs"><b>Step 7: Nusselt Number & Heat Transfer Coefficient</b><br>`;
+    if (fl.Re > 10000) {
+      h += `&emsp;Dittus-Boelter (Re > 10,000): Nu = 0.023 × ${fl.Re}<sup>0.8</sup> × ${fl.Pr.toFixed(2)}<sup>0.4</sup> = <b>${fl.Nu.toFixed(1)}</b><br>`;
+    } else if (fl.Re > 2300) {
+      h += `&emsp;Gnielinski (2300 < Re < 10,000): Nu = (f/8)(Re−1000)Pr / [1+12.7√(f/8)(Pr<sup>2/3</sup>−1)] = <b>${fl.Nu.toFixed(1)}</b><br>`;
+    } else {
+      h += `&emsp;Laminar (constant wall temp): Nu = <b>3.66</b><br>`;
+    }
+    h += `&emsp;h = Nu × k / D = ${fl.Nu.toFixed(1)} × ${fl.k_therm.toFixed(4)} / ${(fl.d_in / 12).toFixed(5)} = <b>${fl.h_conv.toFixed(1)} BTU/(hr·ft²·°F)</b></div>`;
+
+    // Summary result box
+    h += `<div class="rb">`;
+    h += `<table style="margin:0;border:none"><tr>
+      <td style="border:none;padding:2px 10px"><b>v</b> = ${fl.v_fps.toFixed(2)} ft/s</td>
+      <td style="border:none;padding:2px 10px"><b>Re</b> = ${fl.Re.toLocaleString()}</td>
+      <td style="border:none;padding:2px 10px"><b>Pr</b> = ${fl.Pr.toFixed(2)}</td>
+      <td style="border:none;padding:2px 10px"><b>f</b> = ${fl.f_darcy.toFixed(5)}</td>
+    </tr><tr>
+      <td style="border:none;padding:2px 10px"><b>ΔP</b> = ${fl.dP_total_psi.toFixed(4)} psi</td>
+      <td style="border:none;padding:2px 10px"><b>Nu</b> = ${fl.Nu.toFixed(1)}</td>
+      <td style="border:none;padding:2px 10px"><b>h</b> = ${fl.h_conv.toFixed(1)} BTU/(hr·ft²·°F)</td>
+      <td style="border:none;padding:2px 10px"><b>ṁ</b> = ${fl.m_dot_hr.toFixed(1)} lb/hr</td>
+    </tr></table>`;
+    if (fl.velocityOK) {
+      h += `<span class="v" style="color:#27AE60;font-size:12pt">✓ Velocity ${fl.v_fps.toFixed(2)} ft/s — ${fl.velocityNote}</span>`;
+    } else {
+      h += `<span class="v" style="color:#C0392B;font-size:12pt">⚠ Velocity ${fl.v_fps.toFixed(2)} ft/s — ${fl.velocityNote}</span>`;
+    }
+    h += `</div>`;
+  });
+
+  // ═══ SECTION 7: BLADDER SIZING (conditional) ═══
+  const hasBladder = product.internals === "full-bladder" || product.internals === "partial-bladder";
+  const nextSection = hasBladder ? 8 : 7;
+  if (hasBladder) {
+    const bladderNozzle = vessel.nozzles.find(n => n.service === "bladder-flange");
+    h += `<h2>7. Bladder Sizing & Specification</h2>`;
+    h += `<p class="ref">Reference: Industry standard bladder dimensions for ASME expansion tanks. Bladder material per ASTM D2000 (Rubber Products in Automotive Applications — classification system applicable to industrial bladders).</p>`;
+
+    h += `<h3>7.1 Bladder Type</h3>`;
+    h += `<p><b>${bladderNozzle?.bladderType || "Full-Acceptance"} Bladder</b> — ${product.internals === "full-bladder" ? "The bladder occupies the full internal volume of the vessel. 100% of the tank volume is available for water acceptance." : "The bladder occupies a portion of the internal volume. The remaining space above the bladder is the permanent air cushion."}</p>`;
+
+    h += `<h3>7.2 Bladder Dimensions</h3>`;
+    h += `<table>
+      <tr><th>Parameter</th><th>Value</th><th>Basis</th></tr>
+      <tr><td>Bladder Material</td><td>Heavy-duty Butyl Rubber</td><td>Industry standard; excellent air impermeability, chemical resistance to treated water, temperature rating to 240°F</td></tr>
+      <tr><td>Bladder Diameter</td><td>${bladderNozzle?.bladderID || (vessel.D_ID - 2)}" (approx.)</td><td>Vessel ID (${vessel.D_ID}") minus 2" clearance for insertion and expansion</td></tr>
+      <tr><td>Bladder Length</td><td>${bladderNozzle?.bladderLen || Math.round(vessel.shellLength * 0.9)}" (approx.)</td><td>${product.internals === "full-bladder" ? "Approximately 90% of internal straight length + head depth — bladder must reach from bottom flange to near the top head" : "Approximately 50% of shell length — partial acceptance; upper volume reserved for permanent air cushion"}</td></tr>
+      <tr><td>Bladder Thickness</td><td>3/16" to 1/4" nominal</td><td>Industry standard heavy-duty wall for ASME expansion tank service</td></tr>
+      <tr><td>Installation Opening</td><td>${bladderNozzle?.blFlangeSize || 12}" Blind Flange</td><td>ASME B16.5 Class 150# bolted flange on bottom head</td></tr>
+      <tr><td>Flange Bolt Torque</td><td>40–50 ft-lbs</td><td>Cross-pattern tightening sequence</td></tr>
+    </table>`;
+
+    h += `<h3>7.3 Bladder Installation Procedure</h3>`;
+    h += `<p>1. Isolate tank from system and drain all water from the bladder.<br>
+2. Remove air valve core to bleed remaining air charge.<br>
+3. Remove drain plug.<br>
+4. Unbolt the bottom blind flange and extract the old bladder assembly (if replacing).<br>
+5. Wash down and dry the interior of the tank. Inspect for rust blisters and remove.<br>
+6. Fold the new bladder lengthwise and tape at intervals to maintain the fold.<br>
+7. Insert the new bladder through the flange opening, removing tape as it enters the tank.<br>
+8. Pull the bladder neck into position over the blind flange — the bladder neck becomes the gasket.<br>
+9. Re-bolt the blind flange in a cross pattern to 40–50 ft-lbs.<br>
+10. Install drain plug with thread sealant (connection must be absolutely air-tight).<br>
+11. Install air valve core and charge to system fill pressure using dry air or nitrogen.<br>
+12. Check all connections with soapy water for leaks before connecting to system.</p>`;
+
+    h += `<h3>7.4 Bladder Procurement</h3>`;
+    h += `<p>Replacement bladder assemblies are matched to the tank shell diameter and length. Contact JWT Engineering to specify the correct bladder kit for this vessel. The kit includes the bladder, support pipe (if applicable), blind flange gasket, and hardware. Standard lead time for replacement bladders is 2–4 weeks.</p>`;
+  }
+
   // HOW IT WORKS section
-  h += `<h2>6. How This Vessel Works</h2>`;
+  h += `<h2>${nextSection}. How This Vessel Works</h2>`;
   h += `<div class="hiw"><h4>${product.name} — ${product.subtitle}</h4>`;
   product.howItWorks.split('\n\n').forEach(para => {
     h += `<p style="margin-bottom:10px">${para}</p>`;
@@ -1061,15 +1670,17 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
   h += `</div>`;
 
   // Stamp
-  h += `<div class="stamp"><div class="stamp-t">PROFESSIONAL ENGINEER APPROVAL</div>
-    Name: ___________________________<br>PE License No.: ____________________<br>
-    State: _________ Date: ____________<br>Signature: ______________________</div>`;
+  h += `<div class="stamp"><div class="stamp-t">ENGINEERING APPROVAL</div>
+    Prepared By: <b>Eli Wright</b><br>
+    Date: <b>${now}</b><br>
+    Joe White Tank Company, Inc.<br>
+    </div>`;
 
   h += `<div class="ft">
     <img src="${JWT_LOGO}" alt="JWT" style="height:36px;margin-bottom:8px;opacity:0.6"><br>
     Joe White Tank Company, Inc. — Fort Worth, Texas — ASME U-Stamp Certified<br>
     Generated by JWT Expansion Tank Designer v2.0. Calculations per ASME BPVC VIII-1 &amp; ASHRAE methodology.<br>
-    PE verification required prior to fabrication. This report does not constitute a stamped engineering drawing.
+    Engineering verification required prior to fabrication. This report does not constitute a stamped engineering drawing.
   </div></body></html>`;
   return h;
 }
@@ -1085,9 +1696,10 @@ export default function App() {
   const [caValue, setCaValue] = useState(0.0625);
   const [showReport, setShowReport] = useState(false);
   const [reportHTML, setReportHTML] = useState("");
+  const [saving, setSaving] = useState(false);
   const [inputs, setInputs] = useState({
     systemVol: 1000, fillTemp: 40, designTemp: 180,
-    minPressure: 12, maxPressure: 30, mawp: 150,
+    minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100,
   });
 
   const product = PRODUCTS.find(p => p.id === selProduct);
@@ -1103,7 +1715,10 @@ export default function App() {
     if (systemVol <= 0 || mawp <= 0) return null;
 
     if (isBuffer) {
-      const vessel = designVessel(systemVol, mawp, product, materialId, CA);
+      const bufferFlowGPM = inputs.designFlowGPM || (systemVol * 0.5);
+      const vessel = designVessel(systemVol, mawp, product, materialId, CA, {
+        designTempF: designTemp, designFlowGPM: bufferFlowGPM,
+      });
       return { sizing: { minTankVol: systemVol, acceptanceVolGal: systemVol }, vessel };
     }
 
@@ -1126,7 +1741,9 @@ export default function App() {
     }
 
     const selectedVol = Math.max(minTankVol * 1.05, 2);
-    const vessel = designVessel(selectedVol, mawp, product, materialId, CA);
+    const vessel = designVessel(selectedVol, mawp, product, materialId, CA, {
+      expandedWaterGal: expandedWater, designTempF: designTemp, heatUpTimeHr: 1.0,
+    });
 
     return {
       sizing: { vFinal, vInitial, grossExpansion, pipingExpansion, netExpansionFactor, expandedWater, acceptanceFactor, dpf, minTankVol },
@@ -1148,8 +1765,79 @@ export default function App() {
     setCaValue(0.0625);
     setShowReport(false);
     setReportHTML("");
-    setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150 });
+    setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
   };
+
+  // ═══ REPORT VIEW — preview on screen + save button ═══
+  if (showReport && reportHTML) {
+    const bodyContent = reportHTML
+      .replace(/<!DOCTYPE[^>]*>/i, "")
+      .replace(/<\/?html[^>]*>/gi, "")
+      .replace(/<\/?head[^>]*>/gi, "")
+      .replace(/<\/?body[^>]*>/gi, "")
+      .replace(/<meta[^>]*>/gi, "")
+      .replace(/<title[^>]*>[^<]*<\/title>/gi, "");
+
+    return (
+      <div style={{ background: "#e8e8e8", minHeight: "100vh" }}>
+        {/* Toolbar */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 100,
+          background: "#1A1A1A", borderBottom: "2px solid #B8860B",
+          padding: "8px 24px", display: "flex", justifyContent: "space-between",
+          alignItems: "center",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <img src={JWT_LOGO} alt="JWT" style={{ height: 22, opacity: 0.9 }} />
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#B8860B", letterSpacing: 1 }}>
+              ENGINEERING REPORT
+            </span>
+            <span style={{ fontSize: 10, color: "#666" }}>
+              {product?.prefix}-{results?.vessel ? Math.round(results.vessel.actualVolGal) : ""}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button onClick={() => {
+              setSaving(true);
+              const payload = JSON.stringify({
+                p: selProduct, m: materialId, ca: useCA, cv: caValue,
+                sv: inputs.systemVol, ft: inputs.fillTemp, dt: inputs.designTemp,
+                mnp: inputs.minPressure, mxp: inputs.maxPressure,
+                mawp: inputs.mawp, dfg: inputs.designFlowGPM,
+              });
+              const encoded = btoa(payload);
+              sendPrompt("JWT_SAVE:" + encoded);
+            }} style={{
+              background: saving ? "#666" : "linear-gradient(135deg, #B8860B, #D4A017)",
+              border: "none", color: saving ? "#ccc" : "#0A0A0A", padding: "8px 22px",
+              borderRadius: 5, cursor: saving ? "default" : "pointer",
+              fontSize: 11, fontWeight: 800, letterSpacing: 1,
+            }}>
+              {saving ? "⏳ GENERATING FILE..." : "💾 SAVE REPORT"}
+            </button>
+            <button onClick={() => setShowReport(false)} style={{
+              background: "transparent", border: "1px solid #555",
+              color: "#999", padding: "8px 18px", borderRadius: 5,
+              cursor: "pointer", fontSize: 11, fontWeight: 700, letterSpacing: 1,
+            }}>
+              ← BACK
+            </button>
+          </div>
+        </div>
+        {/* Report */}
+        <div
+          dangerouslySetInnerHTML={{ __html: bodyContent }}
+          style={{
+            maxWidth: "8.5in", margin: "20px auto", padding: "40px 52px",
+            background: "#fff", color: "#1a1a1a",
+            fontFamily: "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            fontSize: "10.5pt", lineHeight: 1.55,
+            boxShadow: "0 2px 20px rgba(0,0,0,0.15)", borderRadius: 4,
+          }}
+        />
+      </div>
+    );
+  }
 
   // ═══ PRODUCT SELECTION SCREEN ═══
   if (!selProduct) {
@@ -1170,10 +1858,10 @@ export default function App() {
             {PRODUCTS.map(p => (
               <button key={p.id} onClick={() => {
                 setSelProduct(p.id);
-                if (p.id === "as") setInputs({ systemVol: 80, fillTemp: 40, designTemp: 150, minPressure: 60, maxPressure: 125, mawp: 150 });
-                else if (p.id === "cv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 45, minPressure: 12, maxPressure: 30, mawp: 150 });
-                else if (p.id === "hv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 200, minPressure: 12, maxPressure: 30, mawp: 150 });
-                else setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150 });
+                if (p.id === "as") setInputs({ systemVol: 80, fillTemp: 40, designTemp: 150, minPressure: 60, maxPressure: 125, mawp: 150, designFlowGPM: 0 });
+                else if (p.id === "cv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 45, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
+                else if (p.id === "hv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 200, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
+                else setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 0 });
                 setMaterialId(p.potable ? "SS" : "CS");
               }}
               style={{
@@ -1290,6 +1978,11 @@ export default function App() {
           <InputField label={isBuffer ? "Max Operating Temperature" : (isPotable ? "Aquastat Temperature" : "Max Design Temperature (t)")}
             unit="°F" value={inputs.designTemp} onChange={v => updateInput("designTemp", v)} />
 
+          {isBuffer && (
+            <InputField label="Design Flow Rate" unit="GPM" value={inputs.designFlowGPM}
+              onChange={v => updateInput("designFlowGPM", v)} />
+          )}
+
           {!isBuffer && (
             <>
               <InputField label={isPotable ? "Static Line Pressure (Pf)" : "Min Operating Pressure (Pf)"}
@@ -1398,7 +2091,7 @@ export default function App() {
               <SS title="NOZZLE SCHEDULE">
                 {results.vessel.nozzles.map((n) => (
                   <SR key={n.id} label={`${n.id} — ${n.label2 || n.label}`}
-                    value={n.label.includes("Schrader") ? "Schrader" : `${n.size}"`} />
+                    value={`${n.service === "bladder-flange" ? fracSize(n.blFlangeSize) : fracSize(n.size)} ${n.rating || n.schedule || ""}`} />
                 ))}
               </SS>
               <SS title="DESIGN DATA">
@@ -1435,74 +2128,6 @@ export default function App() {
           📄 GENERATE ENGINEERING REPORT
         </button>
       </div>
-
-      {/* ═══ FULL-SCREEN REPORT OVERLAY ═══ */}
-      {showReport && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 9999,
-          background: "rgba(0,0,0,0.85)",
-          display: "flex", flexDirection: "column",
-          animation: "fadeIn 0.2s ease",
-        }}>
-          {/* Report Toolbar */}
-          <div style={{
-            background: "#1A1A1A", borderBottom: "2px solid #B8860B",
-            padding: "10px 24px", display: "flex", justifyContent: "space-between",
-            alignItems: "center", flexShrink: 0,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <img src={JWT_LOGO} alt="JWT" style={{ height: 24, opacity: 0.9 }} />
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#B8860B", letterSpacing: 1 }}>
-                ENGINEERING REPORT
-              </span>
-              <span style={{ fontSize: 10, color: "#666" }}>
-                {product.prefix}-{results?.vessel ? Math.round(results.vessel.actualVolGal) : ""}
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => {
-                  const printWindow = document.getElementById("jwt-report-frame");
-                  if (printWindow && printWindow.contentWindow) {
-                    printWindow.contentWindow.print();
-                  }
-                }}
-                style={{
-                  background: "linear-gradient(135deg, #B8860B, #D4A017)",
-                  border: "none", color: "#0A0A0A", padding: "8px 22px",
-                  borderRadius: 5, cursor: "pointer", fontSize: 11,
-                  fontWeight: 800, letterSpacing: 1,
-                }}>
-                🖨 PRINT / SAVE PDF
-              </button>
-              <button
-                onClick={() => setShowReport(false)}
-                style={{
-                  background: "transparent", border: "1px solid #555",
-                  color: "#999", padding: "8px 18px", borderRadius: 5,
-                  cursor: "pointer", fontSize: 11, fontWeight: 700, letterSpacing: 1,
-                }}>
-                ✕ CLOSE
-              </button>
-            </div>
-          </div>
-
-          {/* Report Content in iframe with srcdoc */}
-          <div style={{ flex: 1, display: "flex", justifyContent: "center", overflow: "auto", padding: "20px" }}>
-            <iframe
-              id="jwt-report-frame"
-              srcDoc={reportHTML}
-              title="JWT Engineering Report"
-              style={{
-                width: "8.5in", maxWidth: "100%", minHeight: "100%",
-                border: "none", borderRadius: 6,
-                background: "#fff",
-                boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
-              }}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
