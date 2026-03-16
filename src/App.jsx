@@ -1768,20 +1768,53 @@ export default function App() {
     setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
   };
 
-  // ═══ REPORT VIEW — preview on screen + save button ═══
+  // ═══ REPORT VIEW — full page with print ═══
   if (showReport && reportHTML) {
-    const bodyContent = reportHTML
-      .replace(/<!DOCTYPE[^>]*>/i, "")
-      .replace(/<\/?html[^>]*>/gi, "")
-      .replace(/<\/?head[^>]*>/gi, "")
-      .replace(/<\/?body[^>]*>/gi, "")
-      .replace(/<meta[^>]*>/gi, "")
-      .replace(/<title[^>]*>[^<]*<\/title>/gi, "");
+    // Extract just the style and body content from the full HTML document
+    const styleMatch = reportHTML.match(/<style>([\s\S]*?)<\/style>/);
+    const bodyMatch = reportHTML.match(/<body>([\s\S]*?)<\/body>/);
+    const reportStyles = styleMatch ? styleMatch[1] : "";
+    const reportBody = bodyMatch ? bodyMatch[1] : "";
 
     return (
       <div style={{ background: "#e8e8e8", minHeight: "100vh" }}>
-        {/* Toolbar */}
-        <div style={{
+        {/* Inject report styles + print rules */}
+        <style>{`
+          .jwt-report-wrapper { ${reportStyles.replace(/@import[^;]+;/g, "").replace(/body\{/g, "&{").replace(/\*\{[^}]+\}/g, "")} }
+          .jwt-report-wrapper * { box-sizing: border-box; }
+          .jwt-report-wrapper { font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif; color: #1a1a1a; font-size: 10.5pt; line-height: 1.55; }
+          .jwt-report-wrapper h1 { font-size: 20pt; font-weight: 900; color: #8B6914; border-bottom: 3px solid #8B6914; padding-bottom: 6px; margin-bottom: 2px; letter-spacing: 0.5px; }
+          .jwt-report-wrapper h2 { font-size: 13pt; font-weight: 700; color: #222; margin-top: 26px; margin-bottom: 8px; border-left: 4px solid #B8860B; padding-left: 12px; }
+          .jwt-report-wrapper h3 { font-size: 11pt; font-weight: 700; color: #444; margin-top: 16px; margin-bottom: 5px; }
+          .jwt-report-wrapper table { width: 100%; border-collapse: collapse; margin: 8px 0 14px 0; font-size: 9.5pt; }
+          .jwt-report-wrapper th { background: #F5F0E0; color: #333; font-weight: 700; text-align: left; padding: 5px 10px; border: 1px solid #D4C89A; }
+          .jwt-report-wrapper td { padding: 4px 10px; border: 1px solid #ddd; }
+          .jwt-report-wrapper tr:nth-child(even) td { background: #FAFAF5; }
+          .jwt-report-wrapper .hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+          .jwt-report-wrapper .hdr-r { text-align: right; font-size: 8.5pt; color: #666; line-height: 1.6; }
+          .jwt-report-wrapper .mdl { font-size: 15pt; font-weight: 900; color: #333; margin-top: 2px; }
+          .jwt-report-wrapper .sub { font-size: 9.5pt; color: #666; margin-bottom: 16px; }
+          .jwt-report-wrapper .eq { font-family: 'Courier New', monospace; background: #F9F7F0; padding: 7px 14px; margin: 6px 0; border-left: 3px solid #B8860B; font-size: 9.5pt; display: block; line-height: 1.7; }
+          .jwt-report-wrapper .ref { font-size: 8.5pt; color: #999; font-style: italic; margin: 2px 0; }
+          .jwt-report-wrapper .cs { margin: 4px 0 4px 14px; line-height: 1.7; }
+          .jwt-report-wrapper .cs b { color: #8B6914; }
+          .jwt-report-wrapper .rb { background: #FFFBF0; border: 2px solid #B8860B; padding: 12px 16px; margin: 12px 0; border-radius: 5px; }
+          .jwt-report-wrapper .rb .v { font-size: 16pt; font-weight: 900; color: #8B6914; }
+          .jwt-report-wrapper .ft { margin-top: 36px; padding-top: 14px; border-top: 2px solid #B8860B; font-size: 7.5pt; color: #aaa; text-align: center; line-height: 1.6; }
+          .jwt-report-wrapper .stamp { border: 2px solid #333; padding: 12px; margin-top: 28px; font-size: 8.5pt; width: 280px; line-height: 1.8; }
+          .jwt-report-wrapper .stamp-t { font-weight: 900; margin-bottom: 4px; font-size: 9pt; }
+          .jwt-report-wrapper .hiw { background: #F5F5F0; border: 1px solid #E0DCC8; border-radius: 6px; padding: 16px 20px; margin: 20px 0; font-size: 9.5pt; line-height: 1.7; color: #444; }
+          .jwt-report-wrapper .hiw h4 { color: #8B6914; font-size: 10.5pt; margin-bottom: 8px; }
+          .jwt-report-wrapper p { margin: 4px 0; }
+          @media print {
+            .jwt-print-toolbar { display: none !important; }
+            body, html { margin: 0 !important; padding: 0 !important; background: white !important; }
+            .jwt-report-page { margin: 0 !important; box-shadow: none !important; border-radius: 0 !important; padding: 20px 30px !important; max-width: 100% !important; }
+          }
+        `}</style>
+
+        {/* Toolbar — hidden when printing */}
+        <div className="jwt-print-toolbar" style={{
           position: "sticky", top: 0, zIndex: 100,
           background: "#1A1A1A", borderBottom: "2px solid #B8860B",
           padding: "8px 24px", display: "flex", justifyContent: "space-between",
@@ -1798,43 +1831,37 @@ export default function App() {
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button onClick={() => {
-              setSaving(true);
-              const payload = JSON.stringify({
-                p: selProduct, m: materialId, ca: useCA, cv: caValue,
-                sv: inputs.systemVol, ft: inputs.fillTemp, dt: inputs.designTemp,
-                mnp: inputs.minPressure, mxp: inputs.maxPressure,
-                mawp: inputs.mawp, dfg: inputs.designFlowGPM,
-              });
-              const encoded = btoa(payload);
-              sendPrompt("JWT_SAVE:" + encoded);
+              if (reportHTML) {
+                const w = window.open("", "_blank");
+                if (w) { w.document.write(reportHTML); w.document.close(); }
+              }
             }} style={{
-              background: saving ? "#666" : "linear-gradient(135deg, #B8860B, #D4A017)",
-              border: "none", color: saving ? "#ccc" : "#0A0A0A", padding: "8px 22px",
-              borderRadius: 5, cursor: saving ? "default" : "pointer",
-              fontSize: 11, fontWeight: 800, letterSpacing: 1,
+              background: "linear-gradient(135deg, #B8860B, #D4A017)",
+              border: "none", color: "#0A0A0A", padding: "8px 22px",
+              borderRadius: 5, cursor: "pointer", fontSize: 11, fontWeight: 800, letterSpacing: 1,
             }}>
-              {saving ? "⏳ GENERATING FILE..." : "💾 SAVE REPORT"}
+              🖨 PRINT / SAVE PDF
             </button>
-            <button onClick={() => setShowReport(false)} style={{
+            <button onClick={() => { setShowReport(false); setSaving(false); }} style={{
               background: "transparent", border: "1px solid #555",
               color: "#999", padding: "8px 18px", borderRadius: 5,
               cursor: "pointer", fontSize: 11, fontWeight: 700, letterSpacing: 1,
             }}>
-              ← BACK
+              ← BACK TO DESIGNER
             </button>
           </div>
         </div>
-        {/* Report */}
-        <div
-          dangerouslySetInnerHTML={{ __html: bodyContent }}
-          style={{
-            maxWidth: "8.5in", margin: "20px auto", padding: "40px 52px",
-            background: "#fff", color: "#1a1a1a",
-            fontFamily: "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
-            fontSize: "10.5pt", lineHeight: 1.55,
-            boxShadow: "0 2px 20px rgba(0,0,0,0.15)", borderRadius: 4,
-          }}
-        />
+
+        {/* Report content — this is what prints */}
+        <div className="jwt-report-page" style={{
+          maxWidth: "8.5in", margin: "20px auto", padding: "40px 52px",
+          background: "#fff", borderRadius: 4,
+          boxShadow: "0 2px 20px rgba(0,0,0,0.15)",
+        }}>
+          <div className="jwt-report-wrapper"
+            dangerouslySetInnerHTML={{ __html: reportBody }}
+          />
+        </div>
       </div>
     );
   }
