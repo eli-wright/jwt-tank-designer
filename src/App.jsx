@@ -518,34 +518,16 @@ function selectPipeSchedule(nps, mawp, mat) {
 }
 
 function selectDiameter(targetVolGal) {
-  // Try pipe sizes first (≤24")
-  for (const p of STD_PIPE) {
-    const approxID = p.od - 0.75; // rough
-    const headVol2 = 2 * (Math.PI / 6) * Math.pow(approxID / 2, 3) / 231; // pipe cap ≈ hemisphere
-    const remainVol = targetVolGal - headVol2;
-    if (remainVol <= 0) continue;
-    const shellLen = (remainVol * 231 * 4) / (Math.PI * approxID * approxID);
-    const ratio = shellLen / approxID;
-    if (ratio >= 0.8 && ratio <= 5.0) return { type: "pipe", nps: p.nps };
-  }
-
-  // Try rolled diameters (≥30")
-  for (const D of ROLLED_DIAMETERS) {
-    const headVol2 = 2 * (Math.PI * Math.pow(D, 3)) / (24 * 231);
-    const remainVol = targetVolGal - headVol2;
-    if (remainVol <= 0) continue;
-    const shellLen = (remainVol * 231 * 4) / (Math.PI * D * D);
-    const ratio = shellLen / D;
-    if (ratio >= 0.8 && ratio <= 5.0) return { type: "rolled", id: D };
-  }
-
-  // Fallback: find closest to 2:1 L/D
-  let best = { type: "rolled", id: 36 };
-  let bestDiff = Infinity;
+  // Evaluate ALL diameter options (pipe AND rolled) and pick the one
+  // closest to optimal L/D ratio of ~1.5. Industry prefers shorter, fatter
+  // vessels — lighter, cheaper, easier to ship and install.
+  const TARGET_LD = 1.5;
   const allOptions = [
     ...STD_PIPE.map(p => ({ type: "pipe", nps: p.nps, approxID: p.od - 0.75 })),
     ...ROLLED_DIAMETERS.map(d => ({ type: "rolled", id: d, approxID: d })),
   ];
+
+  let best = null, bestScore = Infinity;
   for (const opt of allOptions) {
     const D = opt.approxID;
     const headVol2 = opt.type === "pipe" ?
@@ -555,10 +537,14 @@ function selectDiameter(targetVolGal) {
     if (remainVol <= 0) continue;
     const shellLen = (remainVol * 231 * 4) / (Math.PI * D * D);
     const ratio = shellLen / D;
-    const diff = Math.abs(ratio - 2.5);
-    if (diff < bestDiff) { bestDiff = diff; best = opt; }
+    // Must be within practical range
+    if (ratio < 0.6 || ratio > 5.0) continue;
+    // Score: distance from target L/D, with slight preference for pipe (cheaper) at same ratio
+    const score = Math.abs(ratio - TARGET_LD) + (opt.type === "rolled" ? 0.05 : 0);
+    if (score < bestScore) { bestScore = score; best = opt; }
   }
-  return best;
+
+  return best || { type: "rolled", id: 36 };
 }
 
 // Connection types per industry standard:
@@ -696,9 +682,12 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
   } else {
     nozzlesRaw.push({ id: "N1", ...selectNozzleSize(targetVolGal, "system", product.id), position: "bottom-head", label: "System Conn.", service: "system" });
     nozzlesRaw.push({ id: "N2", ...selectNozzleSize(targetVolGal, "drain", product.id), position: "bottom-side", label: "Drain", service: "drain" });
-    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "airvalve", product.id), position: "top-head", label: "Air Charge Valve", service: "airvalve" });
-    // Bladder tanks: the bottom head has a bolted blind flange for bladder installation/service
-    if (product.internals === "full-bladder" || product.internals === "partial-bladder") {
+    // Bladder tanks: air charge on shell (top-side) since bladder flange occupies top head
+    const hasBladder = product.internals === "full-bladder" || product.internals === "partial-bladder";
+    nozzlesRaw.push({ id: "N3", ...selectNozzleSize(targetVolGal, "airvalve", product.id),
+      position: hasBladder ? "top-side" : "top-head", label: "Air Charge Valve", service: "airvalve" });
+    // Bladder tanks: top head is a bolted blind flange for bladder installation/service
+    if (hasBladder) {
       // Bladder flange must be SMALLER than the shell — the bladder is folded and
       // inserted through this opening. Industry practice: ~40-60% of shell ID for pipe,
       // ~30-45% for rolled shells. The flange ring welds to the head with a cut-out.
@@ -711,7 +700,7 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
         if (s >= (isPipe ? pipeSchedule.id : D_ID) * 0.85) return best; // flange must be well under shell ID
         return Math.abs(s - blFlgTarget) < Math.abs(best - blFlgTarget) ? s : best;
       }, 4);
-      nozzlesRaw.push({ id: "N4", size: snapFlg, label: "Bladder Flange", position: "bottom-head",
+      nozzlesRaw.push({ id: "N4", size: snapFlg, label: "Bladder Flange", position: "top-head",
         connType: `${snapFlg}" Blind Flange (Bolted)`, connSpec: "ASME B16.5, 150#",
         service: "bladder-flange", blFlangeSize: snapFlg });
     }
@@ -730,8 +719,8 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
       const bladderLen = product.internals === "full-bladder" ? 
         Math.round((shellLength + headDepthID) * 0.9) : Math.round(shellLength * 0.5);
       const flangeRatio = Math.round(blFlangeSize / D_ID * 100);
-      const sizingNote = `The bottom head includes a ${blFlangeSize}" bolted blind flange opening (${flangeRatio}% of the ${D_ID}" shell ID). This opening is sized to allow the folded bladder to pass through during installation and field replacement, while leaving adequate head material around the opening for structural integrity and weld attachment of the flange ring. The ${blFlangeSize}" size is consistent with standard industry practice for ${isPipe ? "pipe-constructed" : "rolled-shell"} bladder expansion tanks of this diameter.`;
-      const reinfNote = `The ${blFlangeSize}" flanged opening in the bottom head is reinforced by the flange ring itself (welded to the head), which provides substantial cross-sectional area exceeding the UG-37 area replacement requirement. The blind flange (ASME B16.5, 150#) is bolted to this ring with studs torqued in a cross pattern to 40-50 ft-lbs. The bladder neck seats against the flange face and serves as the gasket.`;
+      const sizingNote = `The top head includes a ${blFlangeSize}" bolted blind flange opening (${flangeRatio}% of the ${D_ID}" shell ID). This opening is sized to allow the folded bladder to pass through during installation and field replacement — gravity assists bladder insertion from the top. This arrangement keeps the bottom head clear for the system connection and drain, matching standard industry practice (e.g., Wessels FXA series).`;
+      const reinfNote = `The ${blFlangeSize}" flanged opening in the top head is reinforced by the flange ring itself (welded to the head), which provides substantial cross-sectional area exceeding the UG-37 area replacement requirement. The blind flange (ASME B16.5, 150#) is bolted to this ring with studs torqued in a cross pattern to 40-50 ft-lbs. The bladder neck seats against the flange face and serves as the gasket.`;
       return { ...n, nozzleOD: 0, tn: 0, schedule: null, d_opening: blFlangeSize, reinf: null, flow: null, flowQ_gpm: 0,
         nozzleMat: materialId === "SS" ? "SA-182 F304" : "SA-105",
         rating: "150#",
@@ -845,7 +834,28 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
   const headWeight = 2 * (isPipe ? shellWeight * headDepthID / shellLength : 
     0.35 * Math.PI * ((D_OD/2)**2 - (D_ID/2)**2) * headDepthID * rho * 2.5);
   const nozzleWeight = nozzles.length * (isPipe ? 3 : 15);
-  const emptyWeight = Math.round(shellWeight + headWeight + nozzleWeight + (isPipe ? 5 : 30));
+
+  // Skirt design
+  const skirtOD = D_OD;
+  const skirtThk = isPipe ? Math.max(0.25, tShell * 0.75) : Math.max(0.25, Math.min(tShell, 0.375));
+  const skirtThkRound = roundUpToStdThickness(skirtThk);
+  const skirtHeight = D_OD <= 16 ? 6 : D_OD <= 24 ? 8 : D_OD <= 36 ? 10 : D_OD <= 48 ? 12 : 16;
+  // Skirt openings (mouse holes) — 180° apart for drain/piping access
+  const skirtOpeningW = Math.max(4, Math.round(skirtOD * 0.2));
+  const skirtOpeningH = Math.max(3, skirtHeight - 2);
+  const skirtWeight = Math.round(Math.PI * skirtOD * skirtHeight * skirtThkRound * rho);
+  const skirtBaseRingThk = Math.max(0.375, skirtThkRound);
+  const skirtBaseRingW = Math.max(1.5, Math.round(skirtOD * 0.04 * 4) / 4); // round to nearest 0.25"
+
+  // Mounting clips (alternative to skirt) — 3 or 4 L-brackets welded to shell
+  const clipCount = D_OD <= 20 ? 3 : 4;
+  const clipThk = Math.max(0.25, skirtThkRound);
+  const clipH = Math.max(3, Math.round(skirtHeight * 0.6));
+  const clipW = Math.max(2, Math.round(D_OD * 0.08));
+  const clipWeight = Math.round(clipCount * clipH * clipW * clipThk * rho * 2); // L-bracket ≈ 2× flat
+
+  const emptyWeight = Math.round(shellWeight + headWeight + nozzleWeight + skirtWeight + (isPipe ? 5 : 30));
+  const emptyWeightClips = Math.round(shellWeight + headWeight + nozzleWeight + clipWeight + (isPipe ? 5 : 30));
   const waterWeight = Math.round(actualVolGal * 8.34);
 
   return {
@@ -858,10 +868,18 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
     headDepthID: Math.round(headDepthID * 100) / 100,
     OAL: Math.round(OAL * 10) / 10,
     actualVolGal: Math.round(actualVolGal * 10) / 10,
-    nozzles, emptyWeight, waterWeight,
+    nozzles, emptyWeight, emptyWeightClips, waterWeight,
     operatingWeight: emptyWeight + waterWeight,
+    operatingWeightClips: emptyWeightClips + waterWeight,
     material: mat, materialId, CA,
     pipeSchedule,
+    skirt: {
+      OD: skirtOD, thk: skirtThkRound, height: skirtHeight,
+      openingW: skirtOpeningW, openingH: skirtOpeningH,
+      baseRingThk: skirtBaseRingThk, baseRingW: skirtBaseRingW,
+      weight: skirtWeight, matSpec: shellSpec,
+    },
+    clips: { count: clipCount, thk: clipThk, H: clipH, W: clipW, weight: clipWeight },
   };
 }
 
@@ -869,7 +887,7 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
 // VESSEL SVG VISUALIZATION
 // ═══════════════════════════════════════════════════════════════
 
-function VesselSVG({ vessel, product, sizing }) {
+function VesselSVG({ vessel, product, sizing, supportType = "skirt" }) {
   if (!vessel) return null;
   const { D_ID, shellLength, headDepthID, isPipe, nozzles } = vessel;
   const isBuffer = product.id === "cv" || product.id === "hv";
@@ -1001,12 +1019,12 @@ function VesselSVG({ vessel, product, sizing }) {
           const flgW = Math.min(sw * 0.95, (n.blFlangeSize || 8) / D_ID * sw * 1.1);
           return (
             <g key={n.id}>
-              <rect x={cx - flgW/2 - 4} y={botY + 2} width={flgW + 8} height={5}
+              <rect x={cx - flgW/2 - 4} y={topY - 7} width={flgW + 8} height={5}
                 fill="#4A4A4A" stroke="#2C2C2C" strokeWidth="1.5" rx="1" />
-              <rect x={cx - flgW/2} y={botY + 7} width={flgW} height={4}
+              <rect x={cx - flgW/2} y={topY - 11} width={flgW} height={4}
                 fill="#5A5A5A" stroke="#2C2C2C" strokeWidth="1" rx="1" />
-              <text x={cx - flgW/2 - 8} y={botY + 10}
-                fontSize="7" fill="#B0B0B0" fontWeight="600" textAnchor="end">{n.id}: Bladder Flg</text>
+              <text x={cx + flgW/2 + 8} y={topY - 5}
+                fontSize="7" fill="#B0B0B0" fontWeight="600" textAnchor="start">{n.id}: Bladder Flg</text>
             </g>
           );
         }
@@ -1089,12 +1107,36 @@ function VesselSVG({ vessel, product, sizing }) {
         t(shell) = {vessel.tShell}"
       </text>
 
-      {/* Support legs */}
-      {vessel.actualVolGal > 15 && (
+      {/* Support: Skirt or Clips */}
+      {vessel.actualVolGal > 5 && supportType === "skirt" && (
         <>
-          <rect x={cx - sw/2 + 4} y={botY} width={10} height={18} fill="#3A3A3A" rx="1" stroke="#222" strokeWidth="1" />
-          <rect x={cx + sw/2 - 14} y={botY} width={10} height={18} fill="#3A3A3A" rx="1" stroke="#222" strokeWidth="1" />
-          <rect x={cx - sw/2} y={botY + 18} width={sw} height={3} fill="#333" rx="1" />
+          {/* Skirt cylinder */}
+          <rect x={cx - sw/2} y={botY} width={sw} height={hd * 0.8 + 12}
+            fill="none" stroke="#555" strokeWidth="2" rx="0" />
+          <rect x={cx - sw/2 + 1} y={botY + 1} width={sw - 2} height={hd * 0.8 + 10}
+            fill="#2A2A2A" rx="0" />
+          {/* Mouse holes (openings) — 2 shown as cutouts at bottom of skirt */}
+          <rect x={cx - sw * 0.12} y={botY + hd * 0.4 + 6} width={sw * 0.24} height={hd * 0.4 + 5}
+            fill="#0D0D18" stroke="#444" strokeWidth="0.8" rx="2" />
+          {/* Base ring */}
+          <rect x={cx - sw/2 - 4} y={botY + hd * 0.8 + 10} width={sw + 8} height={4}
+            fill="#4A4A4A" stroke="#333" strokeWidth="1.5" rx="1" />
+          <text x={cx} y={botY + hd * 0.5 + 4} textAnchor="middle" fill="#666" fontSize="6.5" fontWeight="600">SKIRT</text>
+        </>
+      )}
+      {vessel.actualVolGal > 5 && supportType === "clips" && (
+        <>
+          {/* Mounting clips — L-brackets on sides */}
+          {[-1, 1].map(side => (
+            <g key={side}>
+              <rect x={cx + side * (sw/2 - 2) - (side > 0 ? 0 : 12)} y={botY - 4}
+                width={12} height={20} fill="#4A4A4A" stroke="#333" strokeWidth="1" rx="1" />
+              <rect x={cx + side * (sw/2 + 2) - (side > 0 ? 0 : 16)} y={botY + 14}
+                width={16} height={4} fill="#555" stroke="#333" strokeWidth="1" rx="1" />
+              {/* Bolt holes */}
+              <circle cx={cx + side * (sw/2 + 6)} cy={botY + 16} r="1.5" fill="#222" stroke="#555" strokeWidth="0.5" />
+            </g>
+          ))}
         </>
       )}
     </svg>
@@ -1702,12 +1744,13 @@ export default function App() {
   const [reportHTML, setReportHTML] = useState("");
   const [saving, setSaving] = useState(false);
   const [sizingMode, setSizingMode] = useState("tank"); // "tank" = by tank volume, "system" = calculate from system
-  const [tankVol, setTankVol] = useState(100); // PRIMARY: ordered tank volume (always stored in gallons)
+  const [tankVol, setTankVol] = useState(""); // PRIMARY: ordered tank volume (always stored in gallons)
   const [tankVolUnit, setTankVolUnit] = useState("gal"); // "gal", "L", "lbs"
+  const [supportType, setSupportType] = useState("skirt"); // "skirt" or "clips"
   const [showSizingCalc, setShowSizingCalc] = useState(false);
   const [inputs, setInputs] = useState({
-    systemVol: 1000, fillTemp: 40, designTemp: 180,
-    minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100,
+    systemVol: "", fillTemp: "", designTemp: "",
+    minPressure: "", maxPressure: "", mawp: "", designFlowGPM: "",
   });
 
   const product = PRODUCTS.find(p => p.id === selProduct);
@@ -1715,34 +1758,44 @@ export default function App() {
   const isPotable = product?.potable;
   const CA = useCA ? caValue : 0;
 
-  const updateInput = (key, val) => setInputs(prev => ({ ...prev, [key]: parseFloat(val) || 0 }));
+  const updateInput = (key, val) => setInputs(prev => ({ ...prev, [key]: val === "" ? "" : (parseFloat(val) || 0) }));
 
   // Tank volume unit conversions (internal is always gallons)
-  const galToDisplay = (gal) => tankVolUnit === "L" ? (gal * 3.78541) : tankVolUnit === "lbs" ? (gal * 8.34) : gal;
-  const displayToGal = (val) => tankVolUnit === "L" ? (val / 3.78541) : tankVolUnit === "lbs" ? (val / 8.34) : val;
-  const tankVolDisplay = Math.round(galToDisplay(tankVol) * 10) / 10;
+  const galToDisplay = (gal) => {
+    if (gal === "" || gal === 0) return "";
+    return tankVolUnit === "L" ? (gal * 3.78541) : tankVolUnit === "lbs" ? (gal * 8.34) : gal;
+  };
+  const displayToGal = (val) => {
+    if (val === "" || val === 0) return "";
+    return tankVolUnit === "L" ? (val / 3.78541) : tankVolUnit === "lbs" ? (val / 8.34) : val;
+  };
+  const tankVolDisplay = tankVol === "" ? "" : Math.round(galToDisplay(tankVol) * 10) / 10;
+  const tankVolNum = parseFloat(tankVol) || 0; // numeric version for calculations
 
   // Sizing calculator result (optional helper — does NOT drive vessel design)
   const sizingCalc = useMemo(() => {
     if (!product || isBuffer) return null;
-    const { systemVol, fillTemp, designTemp, minPressure, maxPressure } = inputs;
-    if (systemVol <= 0) return null;
+    const sV = parseFloat(inputs.systemVol) || 0;
+    const fT = isPotable ? 40 : (parseFloat(inputs.fillTemp) || 0);
+    const dT = parseFloat(inputs.designTemp) || 0;
+    const mnP = parseFloat(inputs.minPressure) || 0;
+    const mxP = parseFloat(inputs.maxPressure) || 0;
+    if (sV <= 0 || dT <= 0 || mxP <= 0) return null;
 
-    const fillT = isPotable ? 40 : fillTemp;
-    const vFinal = interpolateWaterVolume(designTemp);
-    const vInitial = interpolateWaterVolume(fillT);
+    const vFinal = interpolateWaterVolume(dT);
+    const vInitial = interpolateWaterVolume(fT);
     const grossExpansion = (vFinal - vInitial) / vInitial;
-    const pipingExpansion = 3 * 6.8e-6 * (designTemp - fillT);
+    const pipingExpansion = 3 * 6.8e-6 * (dT - fT);
     const netExpansionFactor = Math.max(0, grossExpansion - pipingExpansion);
-    const expandedWater = systemVol * netExpansionFactor;
+    const expandedWater = sV * netExpansionFactor;
 
     let acceptanceFactor, minTankVol, dpf;
     if (isPotable) {
-      dpf = calcDPF(minPressure, maxPressure);
+      dpf = calcDPF(mnP, mxP);
       minTankVol = expandedWater * dpf;
       acceptanceFactor = 1 / dpf;
     } else {
-      acceptanceFactor = calcAcceptanceFactor(minPressure, maxPressure);
+      acceptanceFactor = calcAcceptanceFactor(mnP, mxP);
       minTankVol = acceptanceFactor > 0 ? expandedWater / acceptanceFactor : 9999;
     }
 
@@ -1751,23 +1804,25 @@ export default function App() {
 
   // When sizing mode is "system", auto-update tankVol from calculation
   const effectiveTankVol = useMemo(() => {
-    if (isBuffer) return tankVol; // buffer tanks always use direct volume
+    if (isBuffer) return tankVolNum;
     if (sizingMode === "system" && sizingCalc?.minTankVol > 0) {
-      return Math.ceil(sizingCalc.minTankVol * 1.05); // 5% margin, round up
+      return Math.ceil(sizingCalc.minTankVol * 1.05);
     }
-    return tankVol;
-  }, [sizingMode, sizingCalc, tankVol, isBuffer]);
+    return tankVolNum;
+  }, [sizingMode, sizingCalc, tankVolNum, isBuffer]);
 
   // Primary vessel design — driven by effectiveTankVol
   const results = useMemo(() => {
     if (!product) return null;
-    const { mawp, designTemp } = inputs;
+    const mawp = parseFloat(inputs.mawp) || 0;
+    const designTemp = parseFloat(inputs.designTemp) || 0;
+    const flowGPM = parseFloat(inputs.designFlowGPM) || 0;
     if (effectiveTankVol <= 0 || mawp <= 0) return null;
 
     const expandedWater = sizingCalc?.expandedWater || 0;
     const vessel = designVessel(effectiveTankVol, mawp, product, materialId, CA, {
       expandedWaterGal: expandedWater, designTempF: designTemp,
-      heatUpTimeHr: 1.0, designFlowGPM: inputs.designFlowGPM || 0,
+      heatUpTimeHr: 1.0, designFlowGPM: flowGPM,
     });
 
     const sizing = sizingCalc || { minTankVol: effectiveTankVol };
@@ -1789,11 +1844,12 @@ export default function App() {
     setCaValue(0.0625);
     setShowReport(false);
     setReportHTML("");
-    setTankVol(100);
+    setTankVol("");
     setTankVolUnit("gal");
+    setSupportType("skirt");
     setSizingMode("tank");
     setShowSizingCalc(false);
-    setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
+    setInputs({ systemVol: "", fillTemp: "", designTemp: "", minPressure: "", maxPressure: "", mawp: "", designFlowGPM: "" });
   };
 
   // ═══ REPORT VIEW — full page with print ═══
@@ -1913,10 +1969,8 @@ export default function App() {
             {PRODUCTS.map(p => (
               <button key={p.id} onClick={() => {
                 setSelProduct(p.id);
-                if (p.id === "as") setInputs({ systemVol: 80, fillTemp: 40, designTemp: 150, minPressure: 60, maxPressure: 125, mawp: 150, designFlowGPM: 0 });
-                else if (p.id === "cv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 45, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
-                else if (p.id === "hv") setInputs({ systemVol: 200, fillTemp: 40, designTemp: 200, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
-                else setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 0 });
+                setInputs({ systemVol: "", fillTemp: "", designTemp: "", minPressure: "", maxPressure: "", mawp: "", designFlowGPM: "" });
+                setTankVol("");
                 setMaterialId(p.potable ? "SS" : "CS");
               }}
               style={{
@@ -2020,6 +2074,24 @@ export default function App() {
             </div>
           )}
 
+          {/* Support Type */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={lbl}>SUPPORT TYPE</label>
+            <div style={{ display: "flex", gap: 0, borderRadius: 5, overflow: "hidden", border: "1px solid #2A2A3A" }}>
+              <button onClick={() => setSupportType("skirt")}
+                style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
+                  background: supportType === "skirt" ? "#B8860B" : "#1A1A2A",
+                  color: supportType === "skirt" ? "#0D0D16" : "#888",
+                }}>ASME Skirt</button>
+              <button onClick={() => setSupportType("clips")}
+                style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
+                  borderLeft: "1px solid #2A2A3A",
+                  background: supportType === "clips" ? "#B8860B" : "#1A1A2A",
+                  color: supportType === "clips" ? "#0D0D16" : "#888",
+                }}>Mounting Clips</button>
+            </div>
+          </div>
+
           <div style={{ borderTop: "1px solid #1E1E30", margin: "12px 0", paddingTop: 12 }} />
 
           {/* SIZING MODE TOGGLE — not shown for buffer tanks */}
@@ -2047,7 +2119,8 @@ export default function App() {
             <div style={{ marginBottom: 12 }}>
               <label style={lbl}>TANK VOLUME</label>
               <div style={{ display: "flex" }}>
-                <input type="number" value={tankVolDisplay} onChange={e => setTankVol(displayToGal(parseFloat(e.target.value) || 0))}
+                <input type="number" value={tankVolDisplay} placeholder="Enter volume"
+                  onChange={e => setTankVol(e.target.value === "" ? "" : displayToGal(parseFloat(e.target.value) || 0))}
                   style={{ background: "#16162A", border: "1px solid #2A2A3A", borderRight: "none",
                     borderRadius: "5px 0 0 5px", color: "#F0E6D3", padding: "7px 11px",
                     fontSize: 13, fontWeight: 700, width: "100%", outline: "none" }}
@@ -2064,6 +2137,7 @@ export default function App() {
                     }}>{u}</button>
                 ))}
               </div>
+              <div style={{ fontSize: 9, color: "#555", marginTop: 3, fontStyle: "italic" }}>Common sizes: 10, 25, 50, 80, 132, 200, 300, 500 gal</div>
             </div>
           )}
 
@@ -2071,17 +2145,21 @@ export default function App() {
           {(sizingMode === "system" && !isBuffer) && (
             <>
               <InputField label={isPotable ? "Water Heater Volume" : "System Water Volume (Vs)"}
-                unit="gal" value={inputs.systemVol} onChange={v => updateInput("systemVol", v)} />
+                unit="gal" value={inputs.systemVol} onChange={v => updateInput("systemVol", v)}
+                hint={isPotable ? "Typical: 40–120 gal" : "Total water in piping, coils, etc."} />
               {!isPotable && (
                 <InputField label="Fill Water Temperature (Tf)" unit="°F" value={inputs.fillTemp}
-                  onChange={v => updateInput("fillTemp", v)} />
+                  onChange={v => updateInput("fillTemp", v)} hint="Typical: 40°F (cold fill)" />
               )}
               <InputField label={isPotable ? "Aquastat Temperature" : "Max Design Temperature (t)"}
-                unit="°F" value={inputs.designTemp} onChange={v => updateInput("designTemp", v)} />
+                unit="°F" value={inputs.designTemp} onChange={v => updateInput("designTemp", v)}
+                hint={isPotable ? "Typical: 140°F residential, 180°F commercial" : "Typical: 180°F heating, 45°F chilled"} />
               <InputField label={isPotable ? "Static Line Pressure (Pf)" : "Min Operating Pressure (Pf)"}
-                unit="psig" value={inputs.minPressure} onChange={v => updateInput("minPressure", v)} />
+                unit="psig" value={inputs.minPressure} onChange={v => updateInput("minPressure", v)}
+                hint={isPotable ? "Incoming supply pressure at tank" : "Typical: 12–25 psig (fill pressure at tank)"} />
               <InputField label={isPotable ? "Max Allowable Pressure (Po)" : "Max Operating Pressure (Po)"}
-                unit="psig" value={inputs.maxPressure} onChange={v => updateInput("maxPressure", v)} />
+                unit="psig" value={inputs.maxPressure} onChange={v => updateInput("maxPressure", v)}
+                hint={isPotable ? "PRV setting minus 5 psi" : "Relief valve setting or system max"} />
               {/* Show calculated result */}
               {sizingCalc && (
                 <div style={{ background: "#08080E", borderRadius: 6, padding: 10, border: "1px solid #B8860B33", marginBottom: 12 }}>
@@ -2105,7 +2183,8 @@ export default function App() {
               <div style={{ marginBottom: 12 }}>
                 <label style={lbl}>REQUIRED BUFFER VOLUME</label>
                 <div style={{ display: "flex" }}>
-                  <input type="number" value={tankVolDisplay} onChange={e => setTankVol(displayToGal(parseFloat(e.target.value) || 0))}
+                  <input type="number" value={tankVolDisplay} placeholder="Enter volume"
+                    onChange={e => setTankVol(e.target.value === "" ? "" : displayToGal(parseFloat(e.target.value) || 0))}
                     style={{ background: "#16162A", border: "1px solid #2A2A3A", borderRight: "none",
                       borderRadius: "5px 0 0 5px", color: "#F0E6D3", padding: "7px 11px",
                       fontSize: 13, fontWeight: 700, width: "100%", outline: "none" }}
@@ -2122,18 +2201,24 @@ export default function App() {
                       }}>{u}</button>
                   ))}
                 </div>
+                <div style={{ fontSize: 9, color: "#555", marginTop: 3, fontStyle: "italic" }}>
+                  {product?.id === "cv" ? "Rule of thumb: 3–10 gal/ton of cooling" : "Rule of thumb: 5–10 gal/boiler HP"}
+                </div>
               </div>
               <InputField label="Max Operating Temperature" unit="°F" value={inputs.designTemp}
-                onChange={v => updateInput("designTemp", v)} />
+                onChange={v => updateInput("designTemp", v)}
+                hint={product?.id === "cv" ? "Typical: 45°F chilled water" : "Typical: 180–200°F hot water"} />
               <InputField label="Design Flow Rate" unit="GPM" value={inputs.designFlowGPM}
-                onChange={v => updateInput("designFlowGPM", v)} />
+                onChange={v => updateInput("designFlowGPM", v)}
+                hint="System design flow through buffer" />
             </>
           )}
 
           {/* Temperature input for tank-volume mode (needed for flow calcs) */}
           {sizingMode === "tank" && !isBuffer && (
             <InputField label="Max Design Temperature" unit="°F" value={inputs.designTemp}
-              onChange={v => updateInput("designTemp", v)} />
+              onChange={v => updateInput("designTemp", v)}
+              hint="Typical: 180°F heating, 45°F chilled, 240°F max" />
           )}
 
           {/* MAWP Selection */}
@@ -2160,7 +2245,7 @@ export default function App() {
               <RR label="Construction" value={results.vessel.constructionType} />
               <RR label="Shell" value={`${results.vessel.D_ID}" ID × ${results.vessel.shellLength}" S/S`} />
               <RR label="OAL" value={`${results.vessel.OAL}"`} />
-              <RR label="Weight (empty)" value={`~${results.vessel.emptyWeight} lbs`} />
+              <RR label="Weight (empty)" value={`~${supportType === "clips" ? results.vessel.emptyWeightClips : results.vessel.emptyWeight} lbs`} />
             </div>
           )}
 
@@ -2192,7 +2277,7 @@ export default function App() {
 
           {results?.vessel && (
             <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}>
-              <VesselSVG vessel={results.vessel} product={product} sizing={results.sizing} />
+              <VesselSVG vessel={results.vessel} product={product} sizing={results.sizing} supportType={supportType} />
             </div>
           )}
         </div>
@@ -2221,9 +2306,28 @@ export default function App() {
                 <SR label="Corr. Allow." value={CA > 0 ? `${CA}"` : "None"} />
               </SS>
               <SS title="WEIGHTS (EST.)">
-                <SR label="Empty" value={`${results.vessel.emptyWeight} lbs`} />
+                <SR label="Empty" value={`${supportType === "clips" ? results.vessel.emptyWeightClips : results.vessel.emptyWeight} lbs`} />
                 <SR label="Water" value={`${results.vessel.waterWeight} lbs`} />
-                <SR label="Operating" value={`${results.vessel.operatingWeight} lbs`} />
+                <SR label="Operating" value={`${supportType === "clips" ? results.vessel.operatingWeightClips : results.vessel.operatingWeight} lbs`} />
+              </SS>
+              <SS title="SUPPORT">
+                {supportType === "skirt" ? (
+                  <>
+                    <SR label="Type" value="ASME Skirt" />
+                    <SR label="OD" value={`${results.vessel.skirt.OD}"`} />
+                    <SR label="Thickness" value={`${results.vessel.skirt.thk}"`} />
+                    <SR label="Height" value={`${results.vessel.skirt.height}"`} />
+                    <SR label="Openings" value={`2 × ${results.vessel.skirt.openingW}" × ${results.vessel.skirt.openingH}" @ 180°`} />
+                    <SR label="Base Ring" value={`${results.vessel.skirt.baseRingW}" × ${results.vessel.skirt.baseRingThk}" thk`} />
+                  </>
+                ) : (
+                  <>
+                    <SR label="Type" value="Mounting Clips" />
+                    <SR label="Quantity" value={`${results.vessel.clips.count} ea @ ${Math.round(360/results.vessel.clips.count)}°`} />
+                    <SR label="Size" value={`${results.vessel.clips.W}" × ${results.vessel.clips.H}" × ${results.vessel.clips.thk}" thk`} />
+                    <SR label="Bolt Holes" value={`${results.vessel.clips.count} × 1/2" dia`} />
+                  </>
+                )}
               </SS>
               <SS title="NOZZLE SCHEDULE">
                 {results.vessel.nozzles.map((n) => (
@@ -2274,12 +2378,13 @@ const lbl = { fontSize: 9.5, color: "#6A6A7A", fontWeight: 700, display: "block"
 
 // ─── REUSABLE COMPONENTS ─────────────────────────────────────────
 
-function InputField({ label, unit, value, onChange }) {
+function InputField({ label, unit, value, onChange, hint, placeholder }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={lbl}>{label}</label>
       <div style={{ display: "flex" }}>
-        <input type="number" value={value} onChange={e => onChange(e.target.value)}
+        <input type="number" value={value} placeholder={placeholder || ""}
+          onChange={e => onChange(e.target.value === "" ? "" : e.target.value)}
           style={{
             background: "#16162A", border: "1px solid #2A2A3A", borderRight: "none",
             borderRadius: "5px 0 0 5px", color: "#F0E6D3", padding: "7px 11px",
@@ -2293,6 +2398,7 @@ function InputField({ label, unit, value, onChange }) {
           padding: "7px 10px", fontSize: 10, color: "#666", fontWeight: 700, whiteSpace: "nowrap", display: "flex", alignItems: "center",
         }}>{unit}</div>
       </div>
+      {hint && <div style={{ fontSize: 9, color: "#555", marginTop: 3, fontStyle: "italic" }}>{hint}</div>}
     </div>
   );
 }
