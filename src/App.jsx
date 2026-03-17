@@ -1105,7 +1105,7 @@ function VesselSVG({ vessel, product, sizing }) {
 // REPORT GENERATOR (renders inline with print support)
 // ═══════════════════════════════════════════════════════════════
 
-function generateReportHTML(product, inputs, sizing, vessel) {
+function generateReportHTML(product, inputs, sizing, vessel, sizingMode = "system") {
   const now = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const modelNum = `${product.prefix}-${Math.round(vessel.actualVolGal)}`;
   const isBuffer = product.id === "cv" || product.id === "hv";
@@ -1261,8 +1261,12 @@ function generateReportHTML(product, inputs, sizing, vessel) {
   h += `<tr><td>Corrosion Allowance</td><td>${vessel.CA > 0 ? vessel.CA + '"' : "None (0)"}</td><td>${vessel.CA > 0 ? "inches" : "—"}</td></tr>`;
   h += `</table>`;
 
-  // 2. SIZING CALCULATIONS
-  if (!isBuffer) {
+  // 2. SIZING / VOLUME SELECTION
+  if (sizingMode === "tank" && !isBuffer) {
+    h += `<h2>2. Tank Volume Selection</h2>`;
+    h += `<div class="rb">Selected Tank Volume: <span class="v">${vessel.actualVolGal} gallons</span><br>
+    <span style="font-size:9pt;color:#666">Tank volume specified directly per project requirements / catalog selection.</span></div>`;
+  } else if (!isBuffer) {
     h += `<h2>2. Expansion Tank Sizing Calculations</h2>`;
     if (!isPotable) {
       h += `<h3>2.1 Method: Critical Sizing Method (Recommended)</h3>`;
@@ -1697,6 +1701,10 @@ export default function App() {
   const [showReport, setShowReport] = useState(false);
   const [reportHTML, setReportHTML] = useState("");
   const [saving, setSaving] = useState(false);
+  const [sizingMode, setSizingMode] = useState("tank"); // "tank" = by tank volume, "system" = calculate from system
+  const [tankVol, setTankVol] = useState(100); // PRIMARY: ordered tank volume (always stored in gallons)
+  const [tankVolUnit, setTankVolUnit] = useState("gal"); // "gal", "L", "lbs"
+  const [showSizingCalc, setShowSizingCalc] = useState(false);
   const [inputs, setInputs] = useState({
     systemVol: 1000, fillTemp: 40, designTemp: 180,
     minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100,
@@ -1709,18 +1717,16 @@ export default function App() {
 
   const updateInput = (key, val) => setInputs(prev => ({ ...prev, [key]: parseFloat(val) || 0 }));
 
-  const results = useMemo(() => {
-    if (!product) return null;
-    const { systemVol, fillTemp, designTemp, minPressure, maxPressure, mawp } = inputs;
-    if (systemVol <= 0 || mawp <= 0) return null;
+  // Tank volume unit conversions (internal is always gallons)
+  const galToDisplay = (gal) => tankVolUnit === "L" ? (gal * 3.78541) : tankVolUnit === "lbs" ? (gal * 8.34) : gal;
+  const displayToGal = (val) => tankVolUnit === "L" ? (val / 3.78541) : tankVolUnit === "lbs" ? (val / 8.34) : val;
+  const tankVolDisplay = Math.round(galToDisplay(tankVol) * 10) / 10;
 
-    if (isBuffer) {
-      const bufferFlowGPM = inputs.designFlowGPM || (systemVol * 0.5);
-      const vessel = designVessel(systemVol, mawp, product, materialId, CA, {
-        designTempF: designTemp, designFlowGPM: bufferFlowGPM,
-      });
-      return { sizing: { minTankVol: systemVol, acceptanceVolGal: systemVol }, vessel };
-    }
+  // Sizing calculator result (optional helper — does NOT drive vessel design)
+  const sizingCalc = useMemo(() => {
+    if (!product || isBuffer) return null;
+    const { systemVol, fillTemp, designTemp, minPressure, maxPressure } = inputs;
+    if (systemVol <= 0) return null;
 
     const fillT = isPotable ? 40 : fillTemp;
     const vFinal = interpolateWaterVolume(designTemp);
@@ -1740,23 +1746,41 @@ export default function App() {
       minTankVol = acceptanceFactor > 0 ? expandedWater / acceptanceFactor : 9999;
     }
 
-    const selectedVol = Math.max(minTankVol * 1.05, 2);
-    const vessel = designVessel(selectedVol, mawp, product, materialId, CA, {
-      expandedWaterGal: expandedWater, designTempF: designTemp, heatUpTimeHr: 1.0,
+    return { vFinal, vInitial, grossExpansion, pipingExpansion, netExpansionFactor, expandedWater, acceptanceFactor, dpf, minTankVol };
+  }, [product, inputs, isBuffer, isPotable]);
+
+  // When sizing mode is "system", auto-update tankVol from calculation
+  const effectiveTankVol = useMemo(() => {
+    if (isBuffer) return tankVol; // buffer tanks always use direct volume
+    if (sizingMode === "system" && sizingCalc?.minTankVol > 0) {
+      return Math.ceil(sizingCalc.minTankVol * 1.05); // 5% margin, round up
+    }
+    return tankVol;
+  }, [sizingMode, sizingCalc, tankVol, isBuffer]);
+
+  // Primary vessel design — driven by effectiveTankVol
+  const results = useMemo(() => {
+    if (!product) return null;
+    const { mawp, designTemp } = inputs;
+    if (effectiveTankVol <= 0 || mawp <= 0) return null;
+
+    const expandedWater = sizingCalc?.expandedWater || 0;
+    const vessel = designVessel(effectiveTankVol, mawp, product, materialId, CA, {
+      expandedWaterGal: expandedWater, designTempF: designTemp,
+      heatUpTimeHr: 1.0, designFlowGPM: inputs.designFlowGPM || 0,
     });
 
-    return {
-      sizing: { vFinal, vInitial, grossExpansion, pipingExpansion, netExpansionFactor, expandedWater, acceptanceFactor, dpf, minTankVol },
-      vessel,
-    };
-  }, [product, inputs, isBuffer, isPotable, materialId, CA]);
+    const sizing = sizingCalc || { minTankVol: effectiveTankVol };
+
+    return { sizing, vessel };
+  }, [product, effectiveTankVol, inputs, materialId, CA, sizingCalc]);
 
   const handleReport = useCallback(() => {
     if (!results || !product) return;
-    const html = generateReportHTML(product, inputs, results.sizing, results.vessel);
+    const html = generateReportHTML(product, inputs, results.sizing, results.vessel, sizingMode);
     setReportHTML(html);
     setShowReport(true);
-  }, [results, product, inputs]);
+  }, [results, product, inputs, sizingMode]);
 
   const handleReset = () => {
     setSelProduct(null);
@@ -1765,6 +1789,10 @@ export default function App() {
     setCaValue(0.0625);
     setShowReport(false);
     setReportHTML("");
+    setTankVol(100);
+    setTankVolUnit("gal");
+    setSizingMode("tank");
+    setShowSizingCalc(false);
     setInputs({ systemVol: 1000, fillTemp: 40, designTemp: 180, minPressure: 12, maxPressure: 30, mawp: 150, designFlowGPM: 100 });
   };
 
@@ -1994,29 +2022,118 @@ export default function App() {
 
           <div style={{ borderTop: "1px solid #1E1E30", margin: "12px 0", paddingTop: 12 }} />
 
-          <InputField label={isBuffer ? "Required Buffer Volume" : (isPotable ? "Water Heater Volume" : "System Water Volume (Vs)")}
-            unit="gal" value={inputs.systemVol} onChange={v => updateInput("systemVol", v)} />
-
-          {!isBuffer && !isPotable && (
-            <InputField label="Fill Water Temperature (Tf)" unit="°F" value={inputs.fillTemp}
-              onChange={v => updateInput("fillTemp", v)} />
-          )}
-
-          <InputField label={isBuffer ? "Max Operating Temperature" : (isPotable ? "Aquastat Temperature" : "Max Design Temperature (t)")}
-            unit="°F" value={inputs.designTemp} onChange={v => updateInput("designTemp", v)} />
-
-          {isBuffer && (
-            <InputField label="Design Flow Rate" unit="GPM" value={inputs.designFlowGPM}
-              onChange={v => updateInput("designFlowGPM", v)} />
-          )}
-
+          {/* SIZING MODE TOGGLE — not shown for buffer tanks */}
           {!isBuffer && (
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>SIZING METHOD</label>
+              <div style={{ display: "flex", gap: 0, borderRadius: 5, overflow: "hidden", border: "1px solid #2A2A3A" }}>
+                <button onClick={() => setSizingMode("tank")}
+                  style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
+                    background: sizingMode === "tank" ? "#B8860B" : "#1A1A2A",
+                    color: sizingMode === "tank" ? "#0D0D16" : "#888",
+                  }}>Select Tank Volume</button>
+                <button onClick={() => setSizingMode("system")}
+                  style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
+                    borderLeft: "1px solid #2A2A3A",
+                    background: sizingMode === "system" ? "#B8860B" : "#1A1A2A",
+                    color: sizingMode === "system" ? "#0D0D16" : "#888",
+                  }}>Size for System</button>
+              </div>
+            </div>
+          )}
+
+          {/* MODE A: Select Tank Volume (default, industry standard) */}
+          {(sizingMode === "tank" && !isBuffer) && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>TANK VOLUME</label>
+              <div style={{ display: "flex" }}>
+                <input type="number" value={tankVolDisplay} onChange={e => setTankVol(displayToGal(parseFloat(e.target.value) || 0))}
+                  style={{ background: "#16162A", border: "1px solid #2A2A3A", borderRight: "none",
+                    borderRadius: "5px 0 0 5px", color: "#F0E6D3", padding: "7px 11px",
+                    fontSize: 13, fontWeight: 700, width: "100%", outline: "none" }}
+                  onFocus={e => e.target.style.borderColor = "#B8860B"}
+                  onBlur={e => e.target.style.borderColor = "#2A2A3A"} />
+                {["gal", "L", "lbs"].map(u => (
+                  <button key={u} onClick={() => setTankVolUnit(u)}
+                    style={{ padding: "7px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+                      border: "1px solid #2A2A3A", borderLeft: "none",
+                      borderRadius: u === "lbs" ? "0 5px 5px 0" : 0,
+                      background: tankVolUnit === u ? "#B8860B" : "#1E1E32",
+                      color: tankVolUnit === u ? "#0D0D16" : "#666",
+                      whiteSpace: "nowrap", minWidth: 32,
+                    }}>{u}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* MODE B: Size for System — show system parameters */}
+          {(sizingMode === "system" && !isBuffer) && (
             <>
+              <InputField label={isPotable ? "Water Heater Volume" : "System Water Volume (Vs)"}
+                unit="gal" value={inputs.systemVol} onChange={v => updateInput("systemVol", v)} />
+              {!isPotable && (
+                <InputField label="Fill Water Temperature (Tf)" unit="°F" value={inputs.fillTemp}
+                  onChange={v => updateInput("fillTemp", v)} />
+              )}
+              <InputField label={isPotable ? "Aquastat Temperature" : "Max Design Temperature (t)"}
+                unit="°F" value={inputs.designTemp} onChange={v => updateInput("designTemp", v)} />
               <InputField label={isPotable ? "Static Line Pressure (Pf)" : "Min Operating Pressure (Pf)"}
                 unit="psig" value={inputs.minPressure} onChange={v => updateInput("minPressure", v)} />
               <InputField label={isPotable ? "Max Allowable Pressure (Po)" : "Max Operating Pressure (Po)"}
                 unit="psig" value={inputs.maxPressure} onChange={v => updateInput("maxPressure", v)} />
+              {/* Show calculated result */}
+              {sizingCalc && (
+                <div style={{ background: "#08080E", borderRadius: 6, padding: 10, border: "1px solid #B8860B33", marginBottom: 12 }}>
+                  <div style={{ fontSize: 8.5, color: "#B8860B", fontWeight: 800, letterSpacing: 2, marginBottom: 6 }}>SIZING CALCULATION</div>
+                  <RR label="Net Expansion" value={sizingCalc.netExpansionFactor?.toFixed(5)} />
+                  <RR label="Expanded Water" value={`${sizingCalc.expandedWater?.toFixed(2)} gal`} />
+                  {!isPotable && <RR label="Acceptance Factor" value={sizingCalc.acceptanceFactor?.toFixed(4)} />}
+                  {isPotable && <RR label="DPF" value={sizingCalc.dpf?.toFixed(3)} />}
+                  <div style={{ borderTop: "1px solid #B8860B33", paddingTop: 6, marginTop: 6 }}>
+                    <RR label="Min Tank Volume" value={`${sizingCalc.minTankVol?.toFixed(1)} gal`} hl />
+                    <RR label="Design Tank Volume" value={`${effectiveTankVol} gal`} hl />
+                  </div>
+                </div>
+              )}
             </>
+          )}
+
+          {/* BUFFER TANKS — always direct volume */}
+          {isBuffer && (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <label style={lbl}>REQUIRED BUFFER VOLUME</label>
+                <div style={{ display: "flex" }}>
+                  <input type="number" value={tankVolDisplay} onChange={e => setTankVol(displayToGal(parseFloat(e.target.value) || 0))}
+                    style={{ background: "#16162A", border: "1px solid #2A2A3A", borderRight: "none",
+                      borderRadius: "5px 0 0 5px", color: "#F0E6D3", padding: "7px 11px",
+                      fontSize: 13, fontWeight: 700, width: "100%", outline: "none" }}
+                    onFocus={e => e.target.style.borderColor = "#B8860B"}
+                    onBlur={e => e.target.style.borderColor = "#2A2A3A"} />
+                  {["gal", "L", "lbs"].map(u => (
+                    <button key={u} onClick={() => setTankVolUnit(u)}
+                      style={{ padding: "7px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+                        border: "1px solid #2A2A3A", borderLeft: "none",
+                        borderRadius: u === "lbs" ? "0 5px 5px 0" : 0,
+                        background: tankVolUnit === u ? "#B8860B" : "#1E1E32",
+                        color: tankVolUnit === u ? "#0D0D16" : "#666",
+                        whiteSpace: "nowrap", minWidth: 32,
+                      }}>{u}</button>
+                  ))}
+                </div>
+              </div>
+              <InputField label="Max Operating Temperature" unit="°F" value={inputs.designTemp}
+                onChange={v => updateInput("designTemp", v)} />
+              <InputField label="Design Flow Rate" unit="GPM" value={inputs.designFlowGPM}
+                onChange={v => updateInput("designFlowGPM", v)} />
+            </>
+          )}
+
+          {/* Temperature input for tank-volume mode (needed for flow calcs) */}
+          {sizingMode === "tank" && !isBuffer && (
+            <InputField label="Max Design Temperature" unit="°F" value={inputs.designTemp}
+              onChange={v => updateInput("designTemp", v)} />
           )}
 
           {/* MAWP Selection */}
@@ -2038,19 +2155,12 @@ export default function App() {
           {/* RESULTS SUMMARY */}
           {results && (
             <div style={{ background: "#08080E", borderRadius: 8, padding: 14, border: "1px solid #B8860B22", marginTop: 8 }}>
-              <div style={{ fontSize: 9, color: "#B8860B", fontWeight: 800, letterSpacing: 3, marginBottom: 10 }}>SIZING RESULTS</div>
-              {!isBuffer && (
-                <>
-                  <RR label="Net Expansion Factor" value={results.sizing.netExpansionFactor?.toFixed(5)} />
-                  <RR label="Expanded Water" value={`${results.sizing.expandedWater?.toFixed(2)} gal`} />
-                  {!isPotable && <RR label="Acceptance Factor" value={results.sizing.acceptanceFactor?.toFixed(4)} />}
-                  {isPotable && <RR label="Design Pressure Factor" value={results.sizing.dpf?.toFixed(3)} />}
-                </>
-              )}
-              <div style={{ borderTop: "1px solid #B8860B33", paddingTop: 8, marginTop: 8 }}>
-                <RR label="Min Tank Volume" value={`${results.sizing.minTankVol?.toFixed(1)} gal`} hl />
-                <RR label="Selected Volume" value={`${results.vessel.actualVolGal} gal`} hl />
-              </div>
+              <div style={{ fontSize: 9, color: "#B8860B", fontWeight: 800, letterSpacing: 3, marginBottom: 10 }}>VESSEL SUMMARY</div>
+              <RR label="Tank Volume" value={`${results.vessel.actualVolGal} gal`} hl />
+              <RR label="Construction" value={results.vessel.constructionType} />
+              <RR label="Shell" value={`${results.vessel.D_ID}" ID × ${results.vessel.shellLength}" S/S`} />
+              <RR label="OAL" value={`${results.vessel.OAL}"`} />
+              <RR label="Weight (empty)" value={`~${results.vessel.emptyWeight} lbs`} />
             </div>
           )}
 
