@@ -364,15 +364,26 @@ const MATERIALS = {
     head: { spec: "SA-516 Gr. 70", S: 20000, uts: 70000, ys: 38000 },
     pipe: { spec: "SA-106 Gr. B (Seamless) / SA-53 Gr. B (ERW)", S: 20000, uts: 60000, ys: 35000 },
     pipeCap: { spec: "SA-234 WPB", S: 20000 },
-    density: 0.2836, // lb/in³
+    nozzleForging: "SA-105",
+    density: 0.2836,
   },
-  "SS": {
-    id: "SS", label: "Stainless Steel",
+  "SS304": {
+    id: "SS304", label: "304/304L SS",
     shell: { spec: "SA-240 Type 304/304L", S: 20000, uts: 75000, ys: 30000 },
     head: { spec: "SA-240 Type 304/304L", S: 20000, uts: 75000, ys: 30000 },
     pipe: { spec: "SA-312 TP304/304L (Seamless)", S: 20000, uts: 75000, ys: 30000 },
     pipeCap: { spec: "SA-403 WP304", S: 20000 },
-    density: 0.289, // lb/in³
+    nozzleForging: "SA-182 F304",
+    density: 0.289,
+  },
+  "SS316": {
+    id: "SS316", label: "316/316L SS",
+    shell: { spec: "SA-240 Type 316/316L", S: 20000, uts: 75000, ys: 30000 },
+    head: { spec: "SA-240 Type 316/316L", S: 20000, uts: 75000, ys: 30000 },
+    pipe: { spec: "SA-312 TP316/316L (Seamless)", S: 20000, uts: 75000, ys: 30000 },
+    pipeCap: { spec: "SA-403 WP316", S: 20000 },
+    nozzleForging: "SA-182 F316",
+    density: 0.289,
   },
 };
 
@@ -391,12 +402,12 @@ const PRODUCTS = [
   {
     id: "hgfb", name: "JWT HydroGuard-FB",
     subtitle: "Full-Acceptance Bladder Expansion Tank",
-    desc: "A large-capacity expansion tank with a field-replaceable Butyl rubber bladder that occupies the full internal volume. 100% of the tank volume is available to accept expanded water. Designed for large commercial and institutional hydronic systems where decades of service life and easy bladder replacement are essential — no need to replace the entire ASME vessel when the bladder eventually wears.",
+    desc: "A large-capacity expansion tank with a field-replaceable Butyl rubber bladder that occupies the full internal volume. The full-acceptance design maximizes available water acceptance capacity for a given tank size. Designed for large commercial and institutional hydronic systems where decades of service life and easy bladder replacement are essential — no need to replace the entire ASME vessel when the bladder eventually wears.",
     examples: "Hospital campus heating plants (500+ gallon systems) · High-rise hot water distribution · University central heating plants · District energy systems · Large industrial process cooling loops · Data center chilled water systems",
     prefix: "JWT-HGFB", maxTemp: 240, potable: false, internals: "full-bladder",
     mawpOptions: [100, 125, 150, 175, 250, 300], defaultMawp: 150,
     precharge: 12, color: "#2980B9",
-    howItWorks: `This tank uses a heavy-duty replaceable Butyl rubber bladder that occupies the full internal volume of the vessel. System water enters the bladder through the bottom system connection, while the pre-charged air cushion surrounds the bladder between its outer surface and the steel shell. As the system heats, expanding water inflates the bladder, compressing the surrounding air. When the system cools, air pressure forces the water back out.\n\nThe key advantage of the full-acceptance design is that 100% of the tank volume is available for water acceptance, and the bladder is field-replaceable — extending the service life of the vessel by decades. The bladder is installed through the bottom flanged opening.\n\nBladder Sizing: The bladder is matched to the tank shell diameter and length. Standard Butyl bladders are available from established expansion tank manufacturers. Contact JWT engineering for OEM bladder sourcing.\n\nBladder Installation: Drain the tank, bleed air, unbolt the bottom blind flange, extract the old bladder, fold the new bladder and insert through the flange opening, re-bolt to 40-50 ft-lbs in a cross pattern, and re-charge with dry air or nitrogen.\n\nInstallation: Floor-standing vertical on integral welded ring base. Connect to suction side of pump. Pre-charge to system fill pressure while tank is empty of water.`,
+    howItWorks: `This tank uses a heavy-duty replaceable Butyl rubber bladder that occupies the full internal volume of the vessel. System water enters the bladder through the bottom system connection, while the pre-charged air cushion surrounds the bladder between its outer surface and the steel shell. As the system heats, expanding water inflates the bladder, compressing the surrounding air. When the system cools, air pressure forces the water back out.\n\nThe key advantage of the full-acceptance design is that the bladder is field-replaceable — extending the service life of the vessel by decades. The actual usable water acceptance depends on the pressure differential between pre-charge and maximum system operating pressure (the acceptance factor). The bladder is installed through the top flanged opening, where gravity assists insertion.\n\nBladder Sizing: The bladder is matched to the tank shell diameter and length. Contact JWT engineering for replacement bladder sourcing.\n\nBladder Installation: Drain the tank, bleed air, unbolt the top blind flange, extract the old bladder, fold the new bladder and insert through the flange opening (gravity assists), re-bolt to 40-50 ft-lbs in a cross pattern, and re-charge with dry air or nitrogen.\n\nInstallation: Floor-standing vertical on integral welded ring base or mounting clips. Connect to suction side of pump. Pre-charge to system fill pressure while tank is empty of water.`,
   },
   {
     id: "hgrb", name: "JWT HydroGuard-RB",
@@ -406,7 +417,7 @@ const PRODUCTS = [
     prefix: "JWT-HGRB", maxTemp: 240, potable: false, internals: "partial-bladder",
     mawpOptions: [100, 125, 150, 175, 250, 300], defaultMawp: 150,
     precharge: 12, color: "#8E44AD",
-    howItWorks: `This tank uses a replaceable Butyl rubber bladder that occupies a portion of the internal volume. The bladder hangs from a support pipe connected to the bottom blind flange. System water enters the bladder, while the pre-charged air cushion occupies the space above and around it.\n\nThe partial-acceptance design means the bladder volume is less than the total tank volume — the remainder is the permanent air cushion space. This design is more compact for applications where the required acceptance volume is significantly less than the total tank volume.\n\nBladder Sizing: The bladder assembly (bladder + support pipe + blind flange) is a matched set specific to each tank diameter. Standard replacement kits include all three components. Contact JWT engineering for compatible replacement bladder sourcing.\n\nBladder Installation: Same procedure as full-acceptance bladder — isolate, drain, bleed air, unbolt blind flange, swap bladder assembly, re-bolt in cross pattern, and re-charge.\n\nInstallation: Floor-standing vertical. Connect to suction side of pump. Pre-charge to system fill pressure before introducing water.`,
+    howItWorks: `This tank uses a replaceable Butyl rubber bladder that occupies a portion of the internal volume. The bladder hangs from a support pipe connected to the top blind flange. System water enters the bladder through the bottom system connection, while the pre-charged air cushion occupies the space around the bladder.\n\nThe partial-acceptance design means the bladder volume is less than the total tank volume — the remainder is the permanent air cushion space. This design is more compact for applications where the required acceptance volume is significantly less than the total tank volume.\n\nBladder Sizing: The bladder assembly (bladder + support pipe + blind flange) is a matched set specific to each tank diameter. Standard replacement kits include all three components. Contact JWT engineering for compatible replacement bladder sourcing.\n\nBladder Installation: Isolate, drain, bleed air, unbolt the top blind flange, extract the old bladder assembly, insert new bladder assembly through the top opening (gravity assists), re-bolt in cross pattern, and re-charge.\n\nInstallation: Floor-standing vertical. Connect to suction side of pump. Pre-charge to system fill pressure before introducing water.`,
   },
   {
     id: "as", name: "JWT AquaShield",
@@ -710,7 +721,7 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
   const S_v = mat.shell.S;
   const S_n = mat.pipe ? mat.pipe.S : mat.shell.S;
   const nozzles = nozzlesRaw.map(n => {
-    // Bladder flange — bolted access opening in bottom head for bladder service
+    // Bladder flange — bolted access opening in top head for bladder service
     if (n.service === "bladder-flange") {
       const blFlangeSize = n.blFlangeSize;
       const bladderType = product.internals === "full-bladder" ? "Full-Acceptance" : "Partial-Acceptance";
@@ -719,10 +730,10 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
       const bladderLen = product.internals === "full-bladder" ? 
         Math.round((shellLength + headDepthID) * 0.9) : Math.round(shellLength * 0.5);
       const flangeRatio = Math.round(blFlangeSize / D_ID * 100);
-      const sizingNote = `The top head includes a ${blFlangeSize}" bolted blind flange opening (${flangeRatio}% of the ${D_ID}" shell ID). This opening is sized to allow the folded bladder to pass through during installation and field replacement — gravity assists bladder insertion from the top. This arrangement keeps the bottom head clear for the system connection and drain, matching standard industry practice (e.g., Wessels FXA series).`;
+      const sizingNote = `The top head includes a ${blFlangeSize}" bolted blind flange opening (${flangeRatio}% of the ${D_ID}" shell ID). This opening is sized to allow the folded bladder to pass through during installation and field replacement — gravity assists bladder insertion from the top. This arrangement keeps the bottom head clear for the system connection and drain, matching standard industry practice.`;
       const reinfNote = `The ${blFlangeSize}" flanged opening in the top head is reinforced by the flange ring itself (welded to the head), which provides substantial cross-sectional area exceeding the UG-37 area replacement requirement. The blind flange (ASME B16.5, 150#) is bolted to this ring with studs torqued in a cross pattern to 40-50 ft-lbs. The bladder neck seats against the flange face and serves as the gasket.`;
       return { ...n, nozzleOD: 0, tn: 0, schedule: null, d_opening: blFlangeSize, reinf: null, flow: null, flowQ_gpm: 0,
-        nozzleMat: materialId === "SS" ? "SA-182 F304" : "SA-105",
+        nozzleMat: mat.nozzleForging,
         rating: "150#",
         connType: `${blFlangeSize}" Blind Flange (Bolted)`, connSpec: "ASME B16.5, 150#",
         bladderType, bladderMat, bladderID, bladderLen, blFlangeSize, reinfNote,
@@ -732,10 +743,10 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
     // Schrader air charge valve: threaded coupling welded to shell — NOT a pipe nozzle
     if (n.service === "airvalve") {
       return { ...n, nozzleOD: 0.540, tn: 0.088, d_opening: 0.364,
-        nozzleMat: materialId === "SS" ? "SA-182 F304" : "SA-105",
+        nozzleMat: mat.nozzleForging,
         rating: "6000#", schedule: null,
         reinf: null, flow: null, flowQ_gpm: 0,
-        sizingBasis: "Air charge connection is a 6000# forged threaded coupling welded to the vessel shell with a Schrader valve core threaded into the 1/4\" NPT bore. This is standard across all expansion tank manufacturers. The coupling is 6000# rated per ASME B16.11 for the 1/4\" size. The Schrader is identical to an automotive tire valve — compatible with standard air chucks and tire-type pressure gauges for field pre-charge adjustment. No pipe nozzle is used; the forged coupling body provides adequate reinforcement for this small opening." };
+        sizingBasis: "Air charge connection is a 6000# forged threaded coupling welded to the vessel shell with a Schrader-type valve core (0.302\"-32 thread, per SAE J1926) threaded into the 1/4\" NPT bore. The coupling is 6000# rated per ASME B16.11 for the 1/4\" size. The valve is identical in interface to a standard automotive tire valve — compatible with standard air chucks and tire-type pressure gauges for field pre-charge adjustment. No pipe nozzle is used; the forged coupling body provides adequate reinforcement for this small opening." };
     }
 
     const pipeD = NOZZLE_PIPE_DATA[n.size];
@@ -754,8 +765,8 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
     // For couplings: forging material, class rating
     // For flanged: pipe material for nozzle neck, Sch. 80
     const nozzleMat = isFlangedConn ?
-      (materialId === "SS" ? "SA-312 TP304" : "SA-106 Gr. B") :
-      (materialId === "SS" ? "SA-182 F304" : "SA-105");
+      (materialId.startsWith("SS") ? mat.pipe.spec.split(" (")[0] : "SA-106 Gr. B") :
+      (mat.nozzleForging);
     const rating = isFlangedConn ? null : (n.size <= 0.25 ? "6000#" : "3000#");
     const schedule = isFlangedConn ? "Sch. 80" : null; // pipe schedule only for flanged nozzle necks
 
@@ -792,7 +803,11 @@ function designVessel(targetVolGal, mawp, product, materialId, CA, flowParams = 
       // Conservative assumption: full expansion occurs over 1 hour heat-up cycle
       flowQ_gpm = expandedWaterGal > 0 ? (expandedWaterGal / heatUpMinutes) : (targetVolGal * 0.04 / heatUpMinutes);
       flowQ_gpm = Math.max(flowQ_gpm, 0.5); // minimum 0.5 GPM for calculation validity
-      sizingBasis = `System connection flow rate derived from thermal expansion displacement: ${expandedWaterGal.toFixed(2)} gallons of expanded water displaced over a ${heatUpTimeHr}-hour heat-up cycle = ${flowQ_gpm.toFixed(2)} GPM peak flow. This represents the maximum instantaneous flow the nozzle must handle during system warm-up. Connection sized to maintain velocity below 8 ft/s per ASHRAE Handbook recommendations for closed hydronic systems.`;
+      if (expandedWaterGal > 0) {
+        sizingBasis = `System connection flow rate derived from thermal expansion displacement: ${expandedWaterGal.toFixed(2)} gallons of expanded water displaced over a ${heatUpTimeHr}-hour heat-up cycle = ${flowQ_gpm.toFixed(2)} GPM peak flow. This represents the maximum instantaneous flow the nozzle must handle during system warm-up. Connection sized to maintain velocity below 8 ft/s per ASHRAE Handbook recommendations for closed hydronic systems.`;
+      } else {
+        sizingBasis = `System connection flow rate estimated conservatively as 4% of tank volume displaced over a ${heatUpTimeHr}-hour heat-up cycle: ${(targetVolGal * 0.04).toFixed(2)} gallons / ${heatUpMinutes} min = ${flowQ_gpm.toFixed(2)} GPM. This is a conservative estimate when actual system expansion data is not provided. Connection sized to maintain velocity below 8 ft/s per ASHRAE Handbook recommendations for closed hydronic systems.`;
+      }
     } else if (n.service === "drain") {
       // Drain: gravity drain, target 30 min drain-down
       const drainTimeMin = targetVolGal > 500 ? 60 : 30;
@@ -1193,7 +1208,7 @@ function generateReportHTML(product, inputs, sizing, vessel, sizingMode = "syste
     <div class="mdl">${modelNum}</div>
     <div class="sub">${product.name} — ${product.subtitle}</div>
   </div><div class="hdr-r">
-    <strong>Engineering Design Report</strong><br>Prepared by: <b>Eli Wright</b><br>Date: ${now}<br>Fort Worth, Texas<br>ASME Section VIII, Division 1
+    <strong>Engineering Design Report</strong><br>Prepared by: <b>Eli Wright</b>, JWT Engineering Manager<br>Date: ${now}<br>Fort Worth, Texas<br>ASME Section VIII, Division 1
   </div></div>`;
 
   // ═══ BUILD SUMMARY — ready-to-fabricate data at a glance ═══
@@ -1285,7 +1300,15 @@ function generateReportHTML(product, inputs, sizing, vessel, sizingMode = "syste
   // 1. DESIGN INPUTS
   h += `<h2>1. Design Input Parameters</h2><table>
     <tr><th style="width:50%">Parameter</th><th>Value</th><th>Unit</th></tr>`;
-  if (!isBuffer) {
+  if (isBuffer) {
+    h += `<tr><td>Required Buffer Volume</td><td>${vessel.actualVolGal}</td><td>gallons</td></tr>`;
+    h += `<tr><td>Maximum Operating Temperature</td><td>${inputs.designTemp}</td><td>°F</td></tr>`;
+  } else if (sizingMode === "tank") {
+    // Tank-volume mode: show only what was actually specified
+    h += `<tr><td>Selected Tank Volume</td><td>${vessel.actualVolGal}</td><td>gallons</td></tr>`;
+    h += `<tr><td>Maximum Design Temperature</td><td>${inputs.designTemp || product.maxTemp}</td><td>°F</td></tr>`;
+  } else {
+    // System sizing mode: show all system parameters
     h += `<tr><td>${isPotable ? "Water Heater Volume" : "Total System Water Volume (V<sub>s</sub>)"}</td><td>${inputs.systemVol}</td><td>gallons</td></tr>`;
     if (!isPotable) {
       h += `<tr><td>System Fill Water Temperature (T<sub>f</sub>)</td><td>${inputs.fillTemp}</td><td>°F</td></tr>`;
@@ -1293,9 +1316,6 @@ function generateReportHTML(product, inputs, sizing, vessel, sizingMode = "syste
     h += `<tr><td>${isPotable ? "Operating Temperature (Aquastat)" : "Maximum Average Design Temperature (t)"}</td><td>${inputs.designTemp}</td><td>°F</td></tr>`;
     h += `<tr><td>${isPotable ? "Static Line Pressure" : "Minimum Operating Pressure at Tank (P<sub>f</sub>)"}</td><td>${inputs.minPressure}</td><td>psig</td></tr>`;
     h += `<tr><td>${isPotable ? "Maximum Allowable Pressure" : "Maximum Operating Pressure at Tank (P<sub>o</sub>)"}</td><td>${inputs.maxPressure}</td><td>psig</td></tr>`;
-  } else {
-    h += `<tr><td>Required Buffer Volume</td><td>${inputs.systemVol}</td><td>gallons</td></tr>`;
-    h += `<tr><td>Maximum Operating Temperature</td><td>${inputs.designTemp}</td><td>°F</td></tr>`;
   }
   h += `<tr><td>Design Pressure (MAWP)</td><td>${inputs.mawp}</td><td>psig</td></tr>`;
   h += `<tr><td>Shell Material</td><td colspan="2">${vessel.shellSpec}</td></tr>`;
@@ -1438,15 +1458,15 @@ Piping Expansion = 3 × α × ΔT&emsp;where α = 6.8 × 10<sup>−6</sup> in/in
 
   h += `<h3>5.1 Nozzle Connection Types</h3>`;
   h += `<p>All nozzle connections use industry-standard fittings calibrated to match established expansion tank product lines:</p>`;
-  h += `<p><b>Threaded Half-Coupling (≤ 2" NPT):</b> 3000# forged steel coupling (SA-105 for carbon steel, SA-182 F304 for stainless) per ASME B16.11. The coupling is bored to accept the nozzle neck pipe and fillet-welded to the vessel shell or head. This is the standard connection method used by all major expansion tank manufacturers for sizes up to 2".</p>`;
+  h += `<p><b>Threaded Half-Coupling (≤ 2" NPT):</b> 3000# forged steel coupling (${vessel.material.nozzleForging}) per ASME B16.11. The coupling is bored to accept the nozzle neck pipe and fillet-welded to the vessel shell or head. This is the industry-standard connection method for expansion tank nozzles up to 2".</p>`;
   h += `<p><b>Weld-Neck Flange (≥ 3"):</b> ASME B16.5, Class 150# raised-face flange. Used for larger connections on buffer tanks and high-capacity expansion tanks where bolted field connections are required.</p>`;
-  h += `<p><b>Threaded Coupling (Air Charge):</b> A 6000# forged coupling (SA-105 for CS, SA-182 F304 for SS) per ASME B16.11 welded to the shell, with a Schrader valve core threaded into the 1/4" NPT bore. Per B16.11, couplings 1/4" and smaller are rated 6000#. This is universal across the expansion tank industry — identical to automotive tire valve fittings for compatibility with standard air chucks and pressure gauges.</p>`;
+  h += `<p><b>Threaded Coupling (Air Charge):</b> A 6000# forged coupling (${vessel.material.nozzleForging}) per ASME B16.11 welded to the shell, with a Schrader-type valve core (0.302"-32 thread per SAE J1926) threaded into the 1/4" NPT bore. Per B16.11, couplings 1/4" and smaller are rated 6000#. The valve interface is identical to a standard automotive tire valve — compatible with standard air chucks and tire-type pressure gauges for field pre-charge adjustment.</p>`;
 
   h += `<h3>5.2 Nozzle Sizing Rationale</h3>`;
-  h += `<p>Nozzle sizes are calibrated to match industry-standard expansion tank catalogs. The sizes shown were validated against multiple manufacturers' published product data to ensure consistency with established market expectations. Sizes are verified by flow analysis in Section 6.</p>`;
+  h += `<p>Nozzle sizes are calibrated to industry-standard practice for ASME expansion tanks in this class. Sizes are verified by flow analysis in Section 6.</p>`;
   h += `<p><b>System Connection:</b> Sized per industry convention. The expansion tank does not see continuous design flow — it only displaces water during thermal expansion/contraction cycles. The connection must avoid excessive velocity (&lt; 8 ft/s per ASHRAE) during rapid temperature changes.</p>`;
   h += `<p><b>Drain:</b> Sized for reasonable tank drain-down time during maintenance (target &lt; 30 minutes for tanks up to 500 gallons). Minimum 1/2" NPT.</p>`;
-  h += `<p><b>Air Charge Valve:</b> Standard Schrader-type valve in a 1/4" threaded coupling (6000# forged per ASME B16.11). Industry-universal fitting for field pre-charge adjustment.</p>`;
+  h += `<p><b>Air Charge Valve:</b> Schrader-type valve core (0.302"-32 thread, SAE J1926) in a 1/4" 6000# forged threaded coupling (${vessel.material.nozzleForging}, per ASME B16.11). Compatible with standard air chucks and tire-type pressure gauges for field pre-charge adjustment.</p>`;
   h += `<p><b>Nozzle Neck Schedule:</b> All pipe-type nozzle necks are specified as <b>Schedule 80 minimum</b>. Sch. 80 provides substantial excess wall thickness beyond the minimum required by pressure, ensuring adequate reinforcement contribution and resistance to mechanical abuse during field installation.</p>`;
 
   h += `<h3>5.3 Nozzle Reinforcement — Area Replacement Method (UG-37)</h3>`;
@@ -1558,7 +1578,7 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     <tr><td>Specific Heat</td><td>c<sub>p</sub></td><td>${wpReport.cp.toFixed(4)}</td><td>BTU/(lb·°F)</td><td>ASHRAE Fundamentals</td></tr>
     <tr><td>Thermal Conductivity</td><td>k</td><td>${wpReport.k.toFixed(4)}</td><td>BTU/(hr·ft·°F)</td><td>ASHRAE Fundamentals</td></tr>
     <tr><td>Prandtl Number</td><td>Pr = c<sub>p</sub>μ/k</td><td>${((wpReport.cp * wpReport.mu_cP * 6.7197e-4) / (wpReport.k / 3600)).toFixed(2)}</td><td>dimensionless</td><td>Calculated</td></tr>
-    <tr><td>Pipe Roughness (${vessel.materialId === "SS" ? "Stainless" : "Carbon"} Steel)</td><td>ε</td><td>${vessel.materialId === "SS" ? "0.00006" : "0.0018"}</td><td>inches</td><td>Crane TP-410</td></tr>
+    <tr><td>Pipe Roughness (${vessel.materialId.startsWith("SS") ? "Stainless" : "Carbon"} Steel)</td><td>ε</td><td>${vessel.materialId.startsWith("SS") ? "0.00006" : "0.0018"}</td><td>inches</td><td>Crane TP-410</td></tr>
   </table>`;
 
   h += `<h3>6.3 Key Equations</h3>`;
@@ -1621,7 +1641,7 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     h += `&emsp;<b>Pr = ${fl.Pr.toFixed(2)}</b></div>`;
 
     h += `<div class="cs"><b>Step 5: Darcy Friction Factor</b><br>`;
-    h += `&emsp;Pipe roughness: ε = ${fl.epsilon}" (${vessel.materialId === "SS" ? "stainless steel" : "commercial carbon steel"})<br>`;
+    h += `&emsp;Pipe roughness: ε = ${fl.epsilon}" (${vessel.materialId.startsWith("SS") ? "stainless steel" : "commercial carbon steel"})<br>`;
     h += `&emsp;Relative roughness: ε/D = ${fl.epsilon} / ${fl.d_in.toFixed(4)} = ${(fl.epsilon / fl.d_in).toExponential(4)}<br>`;
     if (fl.Re < 2300) {
       h += `&emsp;Laminar: f = 64/Re = 64/${fl.Re} = <b>${fl.f_darcy.toFixed(5)}</b></div>`;
@@ -1676,16 +1696,16 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     h += `<p class="ref">Reference: Industry standard bladder dimensions for ASME expansion tanks. Bladder material per ASTM D2000 (Rubber Products in Automotive Applications — classification system applicable to industrial bladders).</p>`;
 
     h += `<h3>7.1 Bladder Type</h3>`;
-    h += `<p><b>${bladderNozzle?.bladderType || "Full-Acceptance"} Bladder</b> — ${product.internals === "full-bladder" ? "The bladder occupies the full internal volume of the vessel. 100% of the tank volume is available for water acceptance." : "The bladder occupies a portion of the internal volume. The remaining space above the bladder is the permanent air cushion."}</p>`;
+    h += `<p><b>${bladderNozzle?.bladderType || "Full-Acceptance"} Bladder</b> — ${product.internals === "full-bladder" ? "The bladder occupies the full internal volume of the vessel. The actual usable water acceptance depends on the pressure differential between pre-charge and maximum system operating pressure (the acceptance factor)." : "The bladder occupies a portion of the internal volume. The remaining space above the bladder is the permanent air cushion."}</p>`;
 
     h += `<h3>7.2 Bladder Dimensions</h3>`;
     h += `<table>
       <tr><th>Parameter</th><th>Value</th><th>Basis</th></tr>
       <tr><td>Bladder Material</td><td>Heavy-duty Butyl Rubber</td><td>Industry standard; excellent air impermeability, chemical resistance to treated water, temperature rating to 240°F</td></tr>
       <tr><td>Bladder Diameter</td><td>${bladderNozzle?.bladderID || (vessel.D_ID - 2)}" (approx.)</td><td>Vessel ID (${vessel.D_ID}") minus 2" clearance for insertion and expansion</td></tr>
-      <tr><td>Bladder Length</td><td>${bladderNozzle?.bladderLen || Math.round(vessel.shellLength * 0.9)}" (approx.)</td><td>${product.internals === "full-bladder" ? "Approximately 90% of internal straight length + head depth — bladder must reach from bottom flange to near the top head" : "Approximately 50% of shell length — partial acceptance; upper volume reserved for permanent air cushion"}</td></tr>
+      <tr><td>Bladder Length</td><td>${bladderNozzle?.bladderLen || Math.round(vessel.shellLength * 0.9)}" (approx.)</td><td>${product.internals === "full-bladder" ? "Approximately 90% of internal straight length — bladder hangs from top flange opening and must reach to near the bottom head" : "Approximately 50% of shell length — partial acceptance; remaining volume reserved for permanent air cushion"}</td></tr>
       <tr><td>Bladder Thickness</td><td>3/16" to 1/4" nominal</td><td>Industry standard heavy-duty wall for ASME expansion tank service</td></tr>
-      <tr><td>Installation Opening</td><td>${bladderNozzle?.blFlangeSize || 12}" Blind Flange</td><td>ASME B16.5 Class 150# bolted flange on bottom head</td></tr>
+      <tr><td>Installation Opening</td><td>${bladderNozzle?.blFlangeSize || 12}" Blind Flange</td><td>ASME B16.5 Class 150# bolted flange on top head</td></tr>
       <tr><td>Flange Bolt Torque</td><td>40–50 ft-lbs</td><td>Cross-pattern tightening sequence</td></tr>
     </table>`;
 
@@ -1693,11 +1713,11 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
     h += `<p>1. Isolate tank from system and drain all water from the bladder.<br>
 2. Remove air valve core to bleed remaining air charge.<br>
 3. Remove drain plug.<br>
-4. Unbolt the bottom blind flange and extract the old bladder assembly (if replacing).<br>
-5. Wash down and dry the interior of the tank. Inspect for rust blisters and remove.<br>
+4. Unbolt the top blind flange and extract the old bladder assembly (if replacing).<br>
+5. Wash down and dry the interior of the tank. Inspect for ${vessel.materialId === "CS" ? "rust blisters or corrosion" : "mineral deposits or discoloration"} and clean as needed.<br>
 6. Fold the new bladder lengthwise and tape at intervals to maintain the fold.<br>
-7. Insert the new bladder through the flange opening, removing tape as it enters the tank.<br>
-8. Pull the bladder neck into position over the blind flange — the bladder neck becomes the gasket.<br>
+7. Insert the new bladder through the top flange opening — gravity assists insertion. Remove tape as it enters the tank.<br>
+8. Seat the bladder neck over the flange ring — the bladder neck becomes the gasket.<br>
 9. Re-bolt the blind flange in a cross pattern to 40–50 ft-lbs.<br>
 10. Install drain plug with thread sealant (connection must be absolutely air-tight).<br>
 11. Install air valve core and charge to system fill pressure using dry air or nitrogen.<br>
@@ -1718,6 +1738,7 @@ A<sub>3</sub> = Fillet weld area = 2 × (0.5 × w²) &emsp;where w = weld leg si
   // Stamp
   h += `<div class="stamp"><div class="stamp-t">ENGINEERING APPROVAL</div>
     Prepared By: <b>Eli Wright</b><br>
+    Title: JWT Engineering Manager<br>
     Date: <b>${now}</b><br>
     Joe White Tank Company, Inc.<br>
     </div>`;
@@ -1971,7 +1992,7 @@ export default function App() {
                 setSelProduct(p.id);
                 setInputs({ systemVol: "", fillTemp: "", designTemp: "", minPressure: "", maxPressure: "", mawp: "", designFlowGPM: "" });
                 setTankVol("");
-                setMaterialId(p.potable ? "SS" : "CS");
+                setMaterialId(p.potable ? "SS304" : "CS");
               }}
               style={{
                 background: "linear-gradient(150deg, #18182A 0%, #1E1E32 100%)", border: `1px solid ${p.color}25`,
@@ -2099,12 +2120,18 @@ export default function App() {
             <div style={{ marginBottom: 14 }}>
               <label style={lbl}>SIZING METHOD</label>
               <div style={{ display: "flex", gap: 0, borderRadius: 5, overflow: "hidden", border: "1px solid #2A2A3A" }}>
-                <button onClick={() => setSizingMode("tank")}
+                <button onClick={() => {
+                  setSizingMode("tank");
+                  setInputs(prev => ({ ...prev, systemVol: "", fillTemp: "", minPressure: "", maxPressure: "" }));
+                }}
                   style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
                     background: sizingMode === "tank" ? "#B8860B" : "#1A1A2A",
                     color: sizingMode === "tank" ? "#0D0D16" : "#888",
                   }}>Select Tank Volume</button>
-                <button onClick={() => setSizingMode("system")}
+                <button onClick={() => {
+                  setSizingMode("system");
+                  setTankVol("");
+                }}
                   style={{ flex: 1, padding: "7px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", border: "none",
                     borderLeft: "1px solid #2A2A3A",
                     background: sizingMode === "system" ? "#B8860B" : "#1A1A2A",
