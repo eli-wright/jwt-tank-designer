@@ -1,7 +1,11 @@
 # JWT Expansion Tank Designer & Sizer v2.0
 
 **Joe White Tank Company, Inc. — Fort Worth, Texas**  
-Professional ASME Section VIII, Division 1 engineering tool for sizing and designing expansion tanks and buffer vessels.
+Preliminary water expansion, buffer energy sizing, and ASME VIII-1 internal-pressure wall calculations. Full vessel MAWP and fabrication release are not established by this app.
+
+See [the engineering audit](docs/ENGINEERING_AUDIT.md) for corrected methods, validation and remaining design requirements.
+
+The designer must enter the project pressure/temperature basis, exact material allowable stresses from the applicable Section II-D rows, joint efficiencies, and supplier membrane acceptance. Glycol and two-phase operation are outside the water model. Unsupported or incomplete inputs block a vessel result.
 
 ## Live App
 
@@ -53,7 +57,7 @@ Replace `YOUR-USERNAME` with your actual GitHub username.
 ## Local Development
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 Then open `http://localhost:5173/jwt-tank-designer/`
@@ -67,13 +71,23 @@ Output goes to `./dist/`
 
 ---
 
+## Verification
+
+```bash
+npm test
+```
+
+Regression checks and production build run on pull requests. The deployment build also requires passing tests.
+
 ## Features
 
 - **6 product lines**: HydroGuard-D, HydroGuard-FB, HydroGuard-RB, AquaShield, ChillVault, HeatVault
-- **ASME VIII-1 calculations**: Shell (UG-27), head (UG-32), pipe schedule selection
-- **Smithsonian water volume tables** for accurate thermal expansion
-- **Live SVG vessel visualization** with internals, nozzles, and dimensions
-- **Engineering report generator** — full printable PDF-quality report
+- **Internal-pressure wall calculations**: Shell hoop and longitudinal checks (UG-27), ideal 2:1 head (UG-32), corroded dimensions, static head, pipe mill tolerance and forming allowance
+- **IAPWS water properties** for expansion, buffer energy balance and liquid-phase validation
+- **Membrane acceptance**: Actual precharge, pressure window and supplier acceptance limit
+- **Buffer energy sizing**: Minimum output, coincident load, run time, control deadband and active existing volume
+- **Live schematic vessel visualization** with conceptual internals, nozzles, and dimensions
+- **Engineering review report** with calculated values and explicit unresolved design checks
 - **Carbon Steel & Stainless Steel** material options
 - **Corrosion allowance** toggle
 
