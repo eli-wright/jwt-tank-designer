@@ -192,7 +192,7 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   const { designTempF, operatingTempF = designTempF, minPressure, shellStress: plateStress, pipeStress, headStress, nozzleStress,
     shellE, circumferentialE, headE, headFormingLoss = 0.1, plateTolerance = 0.01,
     codeEdition, stressBasis, designFlowGPM = 0, expansionFlowGPM = 0, velocityLimit = 8,
-    atmosphericPsia = 14.7, supportType = 'skirt' } = params;
+    atmosphericPsia = 14.7, supportType = 'skirt', prelim = null } = params;
   const material = MATERIALS[materialId];
   if (!material || !product) throw new RangeError('Select a supported material and product.');
   if (designPressure > Math.max(...product.mawpOptions)) throw new RangeError('Design pressure exceeds the selected product calculation envelope.');
@@ -213,12 +213,23 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   const isBuffer = product.internals === 'none';
   if (isBuffer && designFlowGPM <= 0) throw new RangeError('Buffer nozzle sizing requires the actual design flow.');
   positive(velocityLimit,'Nozzle velocity target');
-  const choice = selectDiameter(targetVolGal), isPipe = choice.type === 'pipe';
+  const choice = selectDiameter(targetVolGal), isPipe = prelim ? prelim.pipe : choice.type === 'pipe';
   const shellStress = isPipe ? pipeStress : plateStress;
   let P = designPressure, pipeSchedule, D_ID, D_OD, tShell, tHead, tShellCalc, tHeadCalc,
     shellMin, headMin, shellLength, headDepthID, OAL, staticHeadPsi, shellRadius;
   let converged = false;
-  for (let i = 0; i < 40; i++) {
+  if (prelim) {
+    const r = prelim.result;
+    D_ID=r.id_inside; D_OD=prelim.od; tShell=r.t_shell_nominal; tHead=r.t_head_nominal;
+    tShellCalc=r.t_shell_required; tHeadCalc=prelim.headMin;
+    shellMin=r.t_shell_design; headMin=prelim.headMin; shellRadius=D_ID/2;
+    shellLength=r.inp.length; headDepthID=prelim.headDepth;
+    OAL=shellLength+2*headDepthID+2*tHead;
+    staticHeadPsi=Math.max(r.static_head_psi,r.static_head_head_psi);
+    P=Math.max(r.p_local_design,r.p_local_head); converged=true;
+    pipeSchedule=isPipe?{schedule:r.plate.schedule,tw:tShell,minWall:shellMin}:null;
+  }
+  for (let i = 0; i < 40 && !prelim; i++) {
     if (isPipe) {
       pipeSchedule = selectPipeSchedule(choice.nps, P, shellStress, CA, 0.125, circumferentialE);
       D_ID = pipeSchedule.id; D_OD = pipeSchedule.od; tShell = pipeSchedule.tw;
@@ -244,18 +255,19 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
     P = next;
   }
   if (!converged) throw new RangeError('Pressure and geometry iteration did not converge.');
-  if (shellLength / D_ID > 5 || shellLength / D_ID < 0.6) throw new RangeError('Final pressure-sized geometry is outside the supported length/diameter range.');
-  const actualVolGal = Math.PI * D_ID ** 2 * shellLength / 4 / 231 + 2 * ellipsoidalHeadVolume(D_ID);
-  const shellCapacity = shellPressureCapacity(shellRadius,shellMin,shellStress,isPipe ? 1 : shellE,CA,circumferentialE) - staticHeadPsi;
-  const headCapacity = headPressureCapacity(D_ID,headMin,headStress,headE,CA) - staticHeadPsi;
-  const pressureScreenPass = shellCapacity >= designPressure && headCapacity >= designPressure;
+  if (!prelim && (shellLength / D_ID > 5 || shellLength / D_ID < 0.6)) throw new RangeError('Final pressure-sized geometry is outside the supported length/diameter range.');
+  const actualVolGal = prelim?.result.volume_gal ?? Math.PI * D_ID ** 2 * shellLength / 4 / 231 + 2 * ellipsoidalHeadVolume(D_ID);
+  const shellCapacity = prelim ? prelim.shellCapacity : shellPressureCapacity(shellRadius,shellMin,shellStress,isPipe ? 1 : shellE,CA,circumferentialE) - staticHeadPsi;
+  const headCapacity = prelim ? prelim.headCapacity : headPressureCapacity(D_ID,headMin,headStress,headE,CA) - staticHeadPsi;
+  const pressureScreenPass = shellCapacity + 1e-6 >= designPressure && headCapacity + 1e-6 >= designPressure;
   if (!pressureScreenPass) throw new RangeError('Selected shell or head does not meet the pressure-wall check.');
   const requirements = [
     'Complete UG-36/37/40/41 opening reinforcement, UG-45 neck requirements, UW-16 attachment and nozzle-load checks with actual fabrication details. No opening exemption is assumed.',
     'Select flanges, couplings, valves, gaskets and bolting for the material group and coincident pressure/temperature. Flange class and bolt torque are not determined here.',
-    'Complete external pressure, MDMT/impact testing, cyclic service, supports/anchors, wind/seismic, inspection, relief protection and hydrotest checks. Vessel MAWP is not established by the shell/head screen.',
+    prelim ? 'Verify the preliminary external-pressure, MDMT, PWHT and RT screens against the actual code edition. Complete cyclic service, structural loads, inspection, relief and hydrotest. Vessel MAWP is not established.' : 'Complete external pressure, MDMT/impact testing, cyclic service, supports/anchors, wind/seismic, inspection, relief protection and hydrotest checks. Vessel MAWP is not established by the shell/head screen.',
     'Verify formed head dimensions and minimum thickness after forming. Drawing geometry and support dimensions are preliminary.',
   ];
+  if (prelim) requirements.push('Prelim material curves, MDMT exemptions, PWHT/RT rules and vacuum checks are preliminary. Confirm the exact project code edition and material records. Nominal head capacity requires guaranteed delivered dimensions and thickness. B16.9 cap geometry and rating require supplier verification.');
   if (!isBuffer) requirements.push('Use the supplier membrane acceptance rating, temperature rating, compatible port arrangement and installation procedure. Shell-side drains must not be connected as water drains across the membrane.');
   if (!isBuffer && expansionFlowGPM === 0) requirements.push('Peak expansion/displacement flow was not supplied. The system port has a preliminary minimum size and no velocity verification.');
   if (product.potable) requirements.push('Confirm potable-water certification for the actual wetted assembly.');
@@ -276,17 +288,17 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
       atmosphericPsia,materialId,nozzleLength,service,velocityLimit}) : null;
     return {id,label,service,position,size:n.size,nozzleOD:n.od,tn:n.sch80,d_opening:n.od - 2*n.minWall + 2*CA,
       minWall:n.minWall,pressureRequired:n.pressureRequired,schedule:'Sch. 80 (B36.10 wall)',rating:'TBD',
-      connType:'Pipe neck with rated end fitting TBD',connSpec:'End fitting / flange class requires selection',nozzleMat:material.pipe.spec,
+      connType:'Pipe neck with rated end fitting TBD',connSpec:'End fitting / flange class requires selection',nozzleMat:prelim?.nozzleSpec ?? material.pipe.spec,
       flow,flowQ_gpm:Q,reinf:null,nozzleLength,sizingBasis:Q > 0 ? 'Sized to entered flow and velocity target. Hydraulic loss is one vessel-port estimate, excluding downstream piping and valves.' : 'Service port size is preliminary. Drain time and flow capacity are not calculated.'};
   });
   if (product.internals.includes('bladder')) nozzles.push({id:'N3',label:'Bladder Access TBD',service:'bladder-flange',
     position:'top-head',size:0,blFlangeSize:0,flow:null,reinf:null,rating:'TBD',connType:'Supplier matched access assembly',
     sizingBasis:'Access bore, flange, bladder dimensions and bolting require the supplier assembly drawing.'});
-  const shellSpec = isPipe ? material.pipe.spec : material.shell.spec, headSpec = material.head.spec;
+  const shellSpec = prelim?.result.material.name ?? (isPipe ? material.pipe.spec : material.shell.spec), headSpec = prelim?.headSpec ?? material.head.spec;
   const shellWeight = Math.PI / 4 * (D_OD ** 2 - D_ID ** 2) * shellLength * material.density;
   // Surface area of two oblate half-spheroids, evaluated at mid-wall radii.
   const a = D_ID / 2 + tHead / 2, c = headDepthID + tHead / 2, e = Math.sqrt(1 - c*c/(a*a));
-  const headWeight = 2 * Math.PI * a*a * (1 + (1-e*e)/e * Math.atanh(e)) * tHead * material.density;
+  const headWeight = prelim ? prelim.result.weight_empty - shellWeight : 2 * Math.PI * a*a * (1 + (1-e*e)/e * Math.atanh(e)) * tHead * material.density;
   const nozzleWeight = nozzles.length * (isPipe ? 3 : 15);
   const skirtHeight = D_OD <= 24 ? 8 : D_OD <= 48 ? 12 : 16;
   const skirtThk = roundUpToStdThickness(Math.max(0.25,Math.min(tShell,0.375)));
@@ -298,12 +310,12 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   const clipWeight = clipCount*clipH*clipW*skirtThk*material.density*2;
   const emptyWeight = Math.ceil(shellWeight+headWeight+nozzleWeight+skirtWeight), emptyWeightClips = Math.ceil(shellWeight+headWeight+nozzleWeight+clipWeight);
   const waterWeight = Math.ceil(actualVolGal/GAL_PER_FT3*62.5);
-  return {isPipe,constructionType:isPipe ? `NPS ${choice.nps} ${pipeSchedule.schedule} Seamless Pipe Shell` : `${D_ID}" ID Rolled Plate Shell`,
-    headType:'Formed 2:1 Ellipsoidal',shellSpec,headSpec,D_ID,D_OD,tShell,tHead,tShellCalc,tHeadCalc,shellMin,headMin,
-    shellJointEff:isPipe ? 1 : shellE,circumferentialE,headE,shellLength,headDepthID,OAL,actualVolGal,targetVolGal,
+  return {prelim,isPipe,constructionType:prelim ? `${isPipe ? 'NPS '+prelim.result.plate.nps+' '+prelim.result.plate.schedule+' '+prelim.result.inp.pipe_product_form+' pipe' : D_ID.toFixed(3)+' in ID rolled plate'} shell` : isPipe ? `NPS ${choice.nps} ${pipeSchedule.schedule} Seamless Pipe Shell` : `${D_ID}" ID Rolled Plate Shell`,
+    headType:prelim ? ({ellipsoidal:'Formed 2:1 Ellipsoidal',hemispherical:'Formed Hemispherical',torispherical:'Formed ASME F&D',pipecap:'B16.9 cap (supplier geometry and rating required)'})[prelim.result.inp.head_type] : 'Formed 2:1 Ellipsoidal',shellSpec,headSpec,D_ID,D_OD,tShell,tHead,tShellCalc,tHeadCalc,shellMin,headMin,
+    shellJointEff:prelim?.result.e_circ ?? (isPipe ? 1 : shellE),circumferentialE:prelim?.longE ?? circumferentialE,headE:prelim?.headE ?? headE,shellLength,headDepthID,OAL,actualVolGal,targetVolGal,
     nozzles,emptyWeight,emptyWeightClips,waterWeight,operatingWeight:emptyWeight+waterWeight,operatingWeightClips:emptyWeightClips+waterWeight,
     material,materialId,CA,pipeSchedule,designPressure,componentPressure:P,staticHeadPsi,designTempF,operatingTempF,minPressure,
-    shellStress,headStress,nozzleStress,headFormingLoss,plateTolerance,codeEdition:String(codeEdition),stressBasis:String(stressBasis),
+    shellStress,headStress,nozzleStress,headFormingLoss:prelim?.headFormingLoss ?? headFormingLoss,plateTolerance:prelim ? 0 : plateTolerance,codeEdition:String(codeEdition),stressBasis:String(stressBasis),
     shellCapacity,headCapacity,pressureScreenPass,requirements,releaseReady:false,supportType,
     skirt:{OD:D_OD,thk:skirtThk,height:skirtHeight,openingW,openingH,baseRingThk,baseRingW,weight:skirtWeight,matSpec:shellSpec},
     clips:{count:clipCount,thk:skirtThk,H:clipH,W:clipW,weight:clipWeight}};

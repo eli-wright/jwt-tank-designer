@@ -1,6 +1,8 @@
-import { sizeExpansion, sizeBuffer, designVessel } from './engineering.js';
+import { PRELIM_DEFAULTS, sizeWithPrelim } from './prelim-adapter.js';
+import { sizeExpansion, sizeBuffer, designVessel, selectDiameter } from './engineering.js';
 
 export const DEFAULT_INPUTS = {
+  ...PRELIM_DEFAULTS,
   systemVol:'', fillTemp:'', operatingTemp:'', designTemp:'', minPressure:'', maxPressure:'',
   mawp:'', designFlowGPM:'', precharge:'', acceptancePercent:'', reliefPressure:'',
   reliefMargin:5, atmosphericPsia:14.7, gasExponent:1, expansionFlowGPM:0,
@@ -23,6 +25,7 @@ export function evaluateDesign({ product, inputs, sizingMode, tankVol, materialI
   let sizing = null, effectiveTankVol = 0;
   const n = (key, label = key) => numberInput(inputs[key],label);
   try {
+    if (!['prelim','entered'].includes(inputs.mechanicalMethod ?? 'entered')) throw new RangeError('Select a valid mechanical sizing method.');
     if (!['system','tank'].includes(sizingMode)) throw new RangeError('Unknown sizing mode.');
     if (sizingMode === 'system') {
       if (product.internals === 'none') {
@@ -50,11 +53,12 @@ export function evaluateDesign({ product, inputs, sizingMode, tankVol, materialI
       throw new RangeError('Require minimum pressure ≤ maximum operating pressure, maximum + margin ≤ relief setting, and relief setting ≤ top design pressure. Use the tank pressure datum for all pressures.');
     }
     if (sizing?.kind === 'buffer' && n('bufferHighTemp') > n('operatingTemp')) throw new RangeError('Maximum fluid temperature must cover the upper buffer control temperature.');
+    const prelim = inputs.mechanicalMethod === 'prelim' ? sizeWithPrelim(effectiveTankVol,designPressure,n('designTemp','design metal temperature'),materialId,CA,inputs,selectDiameter(effectiveTankVol)) : null;
     const vessel = designVessel(effectiveTankVol,designPressure,product,materialId,CA,{
       designTempF:n('designTemp','design metal temperature'),operatingTempF:n('operatingTemp','maximum fluid temperature'),minPressure,
-      shellStress:n('shellStress','plate-shell allowable stress'),pipeStress:n('pipeStress','pipe-shell allowable stress'),headStress:n('headStress','head allowable stress'),nozzleStress:n('nozzleStress','nozzle allowable stress'),
-      shellE:n('shellE'),circumferentialE:n('circumferentialE'),headE:n('headE'),headFormingLoss:n('headFormingPercent')/100,
-      plateTolerance:n('plateTolerance'),codeEdition:inputs.codeEdition,stressBasis:inputs.stressBasis,
+      prelim, shellStress:prelim?.result.S ?? n('shellStress','plate-shell allowable stress'),pipeStress:prelim?.result.S ?? n('pipeStress','pipe-shell allowable stress'),headStress:prelim?.headStress ?? n('headStress','head allowable stress'),nozzleStress:prelim?.nozzleStress ?? n('nozzleStress','nozzle allowable stress'),
+      shellE:prelim?.result.e_circ ?? n('shellE'),circumferentialE:prelim?.longE ?? n('circumferentialE'),headE:prelim?.headE ?? n('headE'),headFormingLoss:prelim?.headFormingLoss ?? n('headFormingPercent')/100,
+      plateTolerance:prelim ? 0 : n('plateTolerance'),codeEdition:inputs.codeEdition,stressBasis:prelim?.sourceBasis ?? inputs.stressBasis,
       designFlowGPM:inputs.designFlowGPM === '' ? 0 : n('designFlowGPM'),expansionFlowGPM:n('expansionFlowGPM'),
       velocityLimit:n('velocityLimit'),atmosphericPsia:n('atmosphericPsia'),supportType,
     });

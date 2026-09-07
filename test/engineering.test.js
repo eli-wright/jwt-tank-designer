@@ -148,7 +148,7 @@ test('buffer nozzles upsize to actual flow and reject unsupported duty',() => {
   assert.throws(() => designVessel(100,150,PRODUCTS[4],'CS',0.0625,basis),/actual design flow/);
   assert.throws(() => designVessel(100,150,PRODUCTS[4],'CS',0.0625,{...basis,designFlowGPM:100000}),/No supported nozzle/);
 });
-const ui = {product:PRODUCTS[0],inputs:{...DEFAULT_INPUTS,systemVol:100,fillTemp:40,operatingTemp:180,designTemp:200,
+const ui = {product:PRODUCTS[0],inputs:{...DEFAULT_INPUTS,mechanicalMethod:"entered",systemVol:100,fillTemp:40,operatingTemp:180,designTemp:200,
   minPressure:12,maxPressure:25,precharge:12,acceptancePercent:100,reliefPressure:30,mawp:150,
   shellStress:20000,pipeStress:17100,headStress:20000,nozzleStress:17100,stressBasis:basis.stressBasis},
   sizingMode:'system',tankVol:500,materialId:'CS',CA:0.0625,supportType:'clips'};

@@ -1,3 +1,4 @@
+import { PrelimControls, PrelimResults } from './PrelimControls.jsx';
 import { useState, useMemo, useId } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MATERIALS } from './engineering-data.js';
@@ -39,7 +40,7 @@ function VesselSVG({ vessel, product, sizing, supportType = "skirt" }) {
   };
   const ic = iColors[product.internals];
 
-  // Head curve: pipe caps are more hemispherical, SE heads are flatter
+  // Schematic head depth follows the selected geometry. Knuckle contours and cap straight flanges require supplier drawings.
   const headCurve = topY;
 
   return (
@@ -328,8 +329,8 @@ export default function App() {
     @media(max-width:640px){.jwt-columns,.product-grid{display:block}.jwt-visual{position:static}.jwt-header{padding:12px}.jwt-header strong{font-size:12px}.product-card{margin-bottom:16px}.jwt-specs{border-left:0}}
   `}</style>
     <header className="jwt-header"><img src={JWT_LOGO} alt="JWT" /><strong>EXPANSION TANK DESIGNER &amp; SIZER</strong>{product && <button className="secondary" onClick={reset}>Products / Reset</button>}</header>
-    {!product ? <main className="products"><h1>Select a product line</h1><p>Water expansion, buffer energy sizing and ASME internal-pressure wall calculations.</p>
-      <div className="notice">Calculations require a project pressure/temperature basis and material allowable stresses. Schematics and component selections remain preliminary until the outstanding vessel checks are completed. Fluid model: pure liquid water.</div>
+    {!product ? <main className="products"><h1>Select a product line</h1><p>Water expansion, buffer energy sizing and prelim ASME vessel sizing.</p>
+      <div className="notice">Calculations require a project pressure/temperature basis. Prelim supplies preliminary material curves and mechanical sizing, or you can enter verified allowable stresses. Schematics and component selections remain preliminary until the outstanding vessel checks are completed. Fluid model: pure liquid water.</div>
       <div className="product-grid">{PRODUCTS.map(p => <button className="product-card" key={p.id} onClick={() => {setSelProduct(p.id);setInputs({...DEFAULT_INPUTS,mawp:p.defaultMawp});}}>
         <h2 style={{color:p.color}}>{p.name}</h2><b>{p.subtitle}</b><p>{p.desc}</p><small>{p.internals === 'none' ? 'Energy balance or direct volume' : 'Pressure and membrane acceptance sizing'}</small>
       </button>)}</div></main> : <>
@@ -368,6 +369,8 @@ export default function App() {
         </Section>
         <Section title="ASME calculation basis">
           {field('codeEdition','Project ASME code edition',null,'Use the edition adopted for this project.',true)}
+          <label className="field">Mechanical sizing method<select aria-label="Mechanical sizing method" value={inputs.mechanicalMethod} onChange={e=>update('mechanicalMethod',e.target.value)}><option value="prelim">Prelim engine and code assessment</option><option value="entered">Entered stress, pressure-wall method</option></select></label>
+          {inputs.mechanicalMethod === 'prelim' ? <PrelimControls inputs={inputs} update={update} field={field} /> : <>
           <small>Enter Section II-D stresses at the design metal temperature for the exact material, product form, thickness and table notes. The app contains no licensed allowable-stress database.</small>
           {field('shellStress','Plate-shell allowable stress','psi','Used when the selected shell is rolled plate.')}
           {field('pipeStress','Seamless pipe-shell allowable stress','psi','Used when the selected shell is standard pipe.')}
@@ -377,6 +380,7 @@ export default function App() {
           {field('circumferentialE','Shell circumferential joint efficiency','E')}{field('headE','Head joint efficiency','E','Enter from the applicable head construction and examination rules.')}
           {field('plateTolerance','Plate thickness deduction','in','Conservative manufacturing allowance. Verify the ordered material basis.')}
           {field('headFormingPercent','Head forming-loss allowance','%','Planning allowance. The supplier must guarantee the required minimum formed thickness.')}
+          </>}
         </Section>
         <Section title="Nozzle flow basis">{isBuffer ? field('designFlowGPM','Actual buffer design flow','GPM') : field('expansionFlowGPM','Peak expansion connection flow','GPM','0 leaves port flow unverified. Total expansion / heat-up time is an average, not a peak.')}
           {field('velocityLimit','Project nozzle velocity target','ft/s','Default is a screening target. Check the project hydraulic requirements.')}
@@ -385,16 +389,20 @@ export default function App() {
       </aside>
       <main className="jwt-visual"><div className="badge">{v ? `${product.prefix}-${Math.round(v.actualVolGal)}` : product.prefix}</div><small>{product.subtitle}</small>
         {error && <div className="notice" role="alert">{error}</div>}
-        {v ? <><VesselSVG vessel={v} product={product} sizing={sizing} supportType={supportType} /><div className="notice">Shell and head internal-pressure screen passes on the entered basis. Complete vessel MAWP and fabrication checks remain open.</div></> : <p className="status">Enter the required design basis to calculate the vessel.</p>}
+        {v ? <><VesselSVG vessel={v} product={product} sizing={sizing} supportType={supportType} /><div className="notice">Shell and head sizing meets the selected preliminary basis, subject to the specified minimum delivered thickness. Complete vessel MAWP and fabrication checks remain open.</div></> : <p className="status">Enter the required design basis to calculate the vessel.</p>}
       </main>
       <aside className="jwt-specs">{v && <>
         <Section title="Dimensions"><Row label="Geometric volume">{format(v.actualVolGal)} gal</Row><Row label="Construction">{v.constructionType}</Row><Row label="Heads">{v.headType}</Row><Row label="ID / OD">{format(v.D_ID)} / {format(v.D_OD)} in</Row><Row label="Shell length">{format(v.shellLength)} in</Row><Row label="Body length">{format(v.OAL)} in</Row></Section>
         <Section title="Pressure-wall results"><Row label="Shell required + CA">{format(v.tShellCalc,5)} in</Row><Row label="Shell nominal / minimum">{format(v.tShell,5)} / {format(v.shellMin,5)} in</Row><Row label="Head required + CA">{format(v.tHeadCalc,5)} in</Row><Row label="Head blank / formed minimum">{format(v.tHead,5)} / {format(v.headMin,5)} in</Row><Row label="Static head allowance">{format(v.staticHeadPsi)} psi</Row><Row label="Shell-only pressure capacity">{format(v.shellCapacity)} psig</Row><Row label="Head-only pressure capacity">{format(v.headCapacity)} psig</Row><small>Component capacities are referenced to the vessel top. Vessel MAWP remains unestablished.</small></Section>
+        {v.prelim && <PrelimResults prelim={v.prelim} />}
         <Section title="Nozzles">{v.nozzles.map(n => <div key={n.id}><Row label={`${n.id} ${n.label}`}>{n.size > 0 ? `NPS ${n.size}` : 'TBD'}</Row>{n.flow && <Row label="Velocity / port loss">{format(n.flow.v_fps)} ft/s / {format(n.flow.dP_total_psi,5)} psi</Row>}<small>{n.schedule || n.connType}. Rating and reinforcement TBD.</small></div>)}</Section>
         <Section title="Estimated full-water load"><Row label="Support concept">{supportType}</Row><Row label="Empty">{supportType === 'clips' ? v.emptyWeightClips : v.emptyWeight} lb</Row><Row label="Full-water gross">{supportType === 'clips' ? v.operatingWeightClips : v.operatingWeight} lb</Row><small>Includes approximate attachments. Confirm lifting, transport and support loads from final fabrication details.</small></Section>
         <Section title="Outstanding checks">{v.requirements.map(r => <p key={r} style={{fontSize:11,lineHeight:1.7}}>{r}</p>)}</Section>
       </>}</aside></div>
-      <footer className="jwt-actions"><button className="secondary" onClick={reset}>Reset all</button><button className="primary" disabled={!v || !!error} onClick={report}>Generate engineering report</button></footer>
+      <footer className="jwt-actions">{v?.prelim && <button className="secondary" onClick={()=>{
+        const blob=new Blob([JSON.stringify({product:product.id,inputs,sizing,vessel:v},null,2)],{type:'application/json'});
+        const url=URL.createObjectURL(blob),a=document.createElement('a'); a.href=url;a.download='jwt-prelim-design.json';a.click();URL.revokeObjectURL(url);
+      }}>Export calculation JSON</button>}<button className="secondary" onClick={reset}>Reset all</button><button className="primary" disabled={!v || !!error} onClick={report}>Generate engineering report</button></footer>
     </>}
   </div>;
 }

@@ -1,5 +1,7 @@
 # Engineering calculation audit
 
+> Follow-up: the default mechanical workflow now uses the prelim engine. See [PRELIM_INTEGRATION.md](PRELIM_INTEGRATION.md) for the current source basis, head options, assessments and validation. The entered-stress method retains the corrections documented below.
+
 This change corrects verified numerical and methodological defects in the original calculation paths. It does not certify a finished ASME vessel. The original application did not contain enough material, opening, weld, flange, loading or examination information to support that conclusion.
 
 ## Corrections

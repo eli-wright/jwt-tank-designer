@@ -1,3 +1,4 @@
+import { prelimSections } from './prelim-summary.js';
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const f = (n,d = 3) => Number.isFinite(n) ? n.toFixed(d) : 'Not evaluated';
 const table = rows => `<table><tbody>${rows.map(([a,b]) => `<tr><th>${escapeHTML(a)}</th><td>${escapeHTML(b)}</td></tr>`).join('')}</tbody></table>`;
@@ -22,7 +23,7 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
     ['Corrosion allowance',`${v.CA} in, internal corrosion assumed`],
     ['Empty precharge',isBuffer ? 'Not applicable' : sizing.kind === 'expansion' ? `${sizing.precharge} psig` : 'Not specified for direct-volume selection'],
   ]);
-  body += '<p>Geometry uses a cylinder and two ideal 2:1 ellipsoidal heads. Each head volume is πD³/24. Formed head straight flanges, fabrication tolerances, internal displacement and the installation envelope require the supplier drawings.</p>';
+  if (!v.prelim) body += '<p>Geometry uses a cylinder and two ideal 2:1 ellipsoidal heads. Each head volume is πD³/24. Formed head straight flanges, fabrication tolerances, internal displacement and the installation envelope require the supplier drawings.</p>';
   body += '<h2>2. Thermal sizing</h2>';
   if (sizing.kind === 'expansion') {
     body += `<p>Pure water, IAPWS-IF97 Region 1. Density is evaluated across the entered temperature range at minimum pressure. Pressure-compression credit and container expansion credit are omitted. The density maximum near 39 °F is included when it lies in the range.</p>`;
@@ -53,6 +54,7 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
   } else {
     body += `<p>Volume entered directly: ${f(v.targetVolGal)} US gal. System expansion, membrane acceptance and buffer run time have not been sized in this mode.</p>`;
   }
+  if (!v.prelim) {
   body += '<h2>3. Internal-pressure wall calculations</h2><p>All components conservatively use the bottom pressure from a full-water column at 62.5 lb/ft³. The top-to-bottom head allowance is recalculated as wall thickness and geometry change.</p>';
   body += table([
     ['Static head allowance',`${f(v.staticHeadPsi,6)} psi`],['Component calculation pressure',`${f(v.componentPressure,6)} psig`],
@@ -69,6 +71,11 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
     Required shell wall = max(hoop, longitudinal)<br>
     2:1 head: t = P (Dnew + 2 CA) / (2 S E_head − 0.2 P) + CA</div>
     <p>For a pipe shell, Rnew uses the largest bore at minimum delivered wall. Both pipe selection and pressure capacity include mill tolerance and corrosion. Selected head thickness is a starting blank allowance. Minimum thickness after forming is the acceptance requirement. B16.9 pipe caps are not substituted for these formed heads.</p>`;
+  } else {
+    body += '<h2>3. Prelim mechanical sizing and code assessment</h2><p>Required volume is passed to prelim, which iterates shell length with the selected schedule, head geometry, radiography and full-water static head. Component capacities are referenced to the vessel top. These are preliminary calculations, not vessel MAWP or fabrication approval. A formed head must be guaranteed to retain at least the calculated required thickness after forming. B16.9 caps require supplier geometry and pressure-temperature rating confirmation.</p>';
+    body += table([['Shell required / nominal wall',`${f(v.tShellCalc,6)} / ${f(v.tShell,6)} in`],['Head required / blank wall',`${f(v.tHeadCalc,6)} / ${f(v.tHead,6)} in`],['Shell-only top capacity',`${f(v.shellCapacity)} psig`],['Head-only top capacity at required minimum',`${f(v.headCapacity)} psig`]]);
+    for (const [title,rows] of prelimSections(v.prelim)) body += `<h3>${escapeHTML(title)}</h3>` + table(rows);
+  }
   body += '<h2>4. Nozzle pressure and hydraulic screening</h2>';
   for (const n of v.nozzles) {
     body += `<h3>${escapeHTML(n.id)}: ${escapeHTML(n.label)}</h3>`;
@@ -89,7 +96,7 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
     ['Full-water gross weight estimate',`${selectedEmpty + v.waterWeight} lb`],['Structural status','Supports, anchors, lifting and nozzle loads require analysis']]);
   body += '<p>Weights include geometric shell/head estimates and approximate attachments. They exclude final bladder/access assemblies, detailed bolting, insulation and piping. Full-water weight is a load case, not an expansion-tank operating liquid level.</p>';
   body += '<h2>6. Outstanding design requirements</h2><ul>' + v.requirements.map(s => `<li>${escapeHTML(s)}</li>`).join('') + '</ul>';
-  body += `<h2>7. References and scope</h2><p><a href="https://iapws.org/technical-guidance/release/IF97-Rev.download">IAPWS-IF97, Regions 1 and 4</a>. <a href="https://www.watts.com/resources/planning/etp">Watts expansion-tank volume and acceptance selection</a>. <a href="https://www.caleffi.com/en-us/blog/design-details-air-water-heat-pump">Caleffi buffer energy-balance sizing</a>. <a href="https://www.asme.org/codes-standards/find-codes-standards/bpvc-viii-1-bpvc-section-viii-rules-construction-pressure-vessels-division-1">ASME VIII-1 scope</a>. <a href="https://www.codeware.com/products/compress/nozzles/">Codeware nozzle design scope</a>.</p><p>Project ASME edition and Section II-D allowable stresses are entered by the designer. Licensed code tables, exemptions and full code compliance have not been independently established by this app.</p>`;
+  body += `<h2>7. References and scope</h2><p><a href="https://iapws.org/technical-guidance/release/IF97-Rev.download">IAPWS-IF97, Regions 1 and 4</a>. <a href="https://www.watts.com/resources/planning/etp">Watts expansion-tank volume and acceptance selection</a>. <a href="https://www.caleffi.com/en-us/blog/design-details-air-water-heat-pump">Caleffi buffer energy-balance sizing</a>. <a href="https://www.asme.org/codes-standards/find-codes-standards/bpvc-viii-1-bpvc-section-viii-rules-construction-pressure-vessels-division-1">ASME VIII-1 scope</a>. <a href="https://www.codeware.com/products/compress/nozzles/">Codeware nozzle design scope</a>.</p><p>The project ASME edition is entered by the designer. Allowable stresses use either the identified prelim reference curves or the entered project values, as recorded in the calculation basis. Licensed code tables, exemptions and full code compliance have not been independently established by this app.</p>`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>JWT calculation review ${escapeHTML(model)}</title><style>
     *{box-sizing:border-box}body{font-family:Aptos,'Segoe UI',sans-serif;color:#222;background:white;margin:32px;line-height:1.5;font-size:10pt}
     h1{font-size:20pt;color:#8B6914}h2{font-size:13pt;border-left:4px solid #B8860B;padding-left:10px;margin-top:24px}h3{font-size:11pt}
