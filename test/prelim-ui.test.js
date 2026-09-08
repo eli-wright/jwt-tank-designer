@@ -20,7 +20,7 @@ test('React renders the prelim controls, selected values, result sections and pr
       return renderToStaticMarkup(React.createElement(React.Fragment,null,
         React.createElement(PrelimControls,{inputs,field,update:()=>{}}),
         React.createElement(PrelimResults,{prelim:p}),React.createElement(App)));
-    }`,resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'jsx'},bundle:true,platform:'node',format:'cjs',jsx:'automatic',write:false});
+    }`,resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'jsx'},bundle:true,platform:'node',format:'cjs',jsx:'automatic',loader:{'.css':'empty'},write:false});
   const dir=await mkdtemp(join(tmpdir(),'jwt-prelim-ui-'));
   try {
     const path=join(dir,'render.cjs');await writeFile(path,out.outputFiles[0].contents);
