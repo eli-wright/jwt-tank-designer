@@ -1,59 +1,22 @@
 # JWT Expansion Tank Designer & Sizer v2.0
 
 **Joe White Tank Company, Inc. — Fort Worth, Texas**  
-Professional ASME Section VIII, Division 1 engineering tool for sizing and designing expansion tanks and buffer vessels.
+Water expansion, buffer energy sizing, and preliminary ASME VIII-1 mechanical sizing using the prelim engine. Full vessel MAWP and fabrication release are not established by this app.
 
-## Live App
+See [the prelim integration](docs/PRELIM_INTEGRATION.md) for the source revision, implemented calculations, validation and limitations. The [earlier engineering audit](docs/ENGINEERING_AUDIT.md) records the original thermal and pressure-wall corrections.
 
-Once deployed: `https://YOUR-USERNAME.github.io/jwt-tank-designer/`
+The designer enters the project pressure/temperature basis and supplier membrane acceptance. Prelim supplies temperature-dependent preliminary material curves, stock selection, radiography, MDMT, PWHT and optional vacuum screening. An alternative entered-stress mode accepts project Section II-D values. Glycol and two-phase operation are outside the water model. Unsupported or incomplete inputs block a vessel result.
 
----
+## Deployment
 
-## Deploy to GitHub Pages (5 steps)
+Changes are reviewed through pull requests. Merging to `main` runs the test/build gate and the existing GitHub Pages deployment workflow. A draft pull request does not change the deployed application.
 
-### Step 1 — Create a GitHub repository
-1. Go to [github.com/new](https://github.com/new)
-2. Name it exactly: `jwt-tank-designer`
-3. Set to **Public** (required for free GitHub Pages)
-4. Click **Create repository** (do NOT add README/gitignore — the repo must be empty)
-
-### Step 2 — Update the base URL
-Open `vite.config.js` and confirm the `base` matches your repo name:
-```js
-base: '/jwt-tank-designer/',
-```
-If you named your repo something different, change it here.
-
-### Step 3 — Push the code
-Open a terminal in this folder and run:
-```bash
-git init
-git add .
-git commit -m "Initial commit: JWT Tank Designer v2.0"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/jwt-tank-designer.git
-git push -u origin main
-```
-Replace `YOUR-USERNAME` with your actual GitHub username.
-
-### Step 4 — Enable GitHub Pages
-1. Go to your repository on GitHub
-2. Click **Settings** → **Pages** (left sidebar)
-3. Under **Source**, select **GitHub Actions**
-4. Save
-
-### Step 5 — Watch it deploy
-1. Click the **Actions** tab in your repository
-2. You'll see the "Deploy to GitHub Pages" workflow running
-3. Once it shows a green checkmark, your app is live at:  
-   `https://YOUR-USERNAME.github.io/jwt-tank-designer/`
-
----
+The Vite base path is `/jwt-tank-designer/`.
 
 ## Local Development
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 Then open `http://localhost:5173/jwt-tank-designer/`
@@ -67,13 +30,26 @@ Output goes to `./dist/`
 
 ---
 
+## Verification
+
+```bash
+npm test
+```
+
+Regression checks and production build run on pull requests. The deployment build also requires passing tests.
+
 ## Features
 
 - **6 product lines**: HydroGuard-D, HydroGuard-FB, HydroGuard-RB, AquaShield, ChillVault, HeatVault
-- **ASME VIII-1 calculations**: Shell (UG-27), head (UG-32), pipe schedule selection
-- **Smithsonian water volume tables** for accurate thermal expansion
-- **Live SVG vessel visualization** with internals, nozzles, and dimensions
-- **Engineering report generator** — full printable PDF-quality report
+- **Prelim mechanical sizing**: Pipe and plate, four head types, ID/OD basis, material/product-form mapping, RT selection, approximate MDMT/PWHT and optional external-pressure screens
+- **Procurement estimates**: Stock, courses, segments, pipe joints, drop, weight and estimating costs
+- **Calculation JSON export** with source revision and complete results
+- **Alternative entered-stress wall calculations**: Shell hoop and longitudinal checks (UG-27), ideal 2:1 head (UG-32), corroded dimensions, static head, pipe mill tolerance and forming allowance
+- **IAPWS water properties** for expansion, buffer energy balance and liquid-phase validation
+- **Membrane acceptance**: Actual precharge, pressure window and supplier acceptance limit
+- **Buffer energy sizing**: Minimum output, coincident load, run time, control deadband and active existing volume
+- **Live schematic vessel visualization** with conceptual internals, nozzles, and dimensions
+- **Engineering review report** with calculated values and explicit unresolved design checks
 - **Carbon Steel & Stainless Steel** material options
 - **Corrosion allowance** toggle
 
