@@ -1,5 +1,7 @@
 import { STD_PIPE, ROLLED_DIAMETERS, NOZZLE_PIPE_DATA, MATERIALS } from './engineering-data.js';
-import { finite, positive, temperatureF, waterAtF, waterViscosityCP, GAL_PER_FT3 } from './water.js';
+import { finite, positive, temperatureF, GAL_PER_FT3 } from './water.js';
+import { FLUIDS, fluidAtF, fluidLabel, fluidTemperatureF, fluidViscosityCP,
+  freezePointF, maxDensityBetween } from './fluid.js';
 
 export function fraction(value, name, includeOne = true) {
   positive(value, name);
@@ -7,12 +9,14 @@ export function fraction(value, name, includeOne = true) {
   return value;
 }
 
-// Water volume is specified at the cold endpoint. No system-container expansion
+// Fluid volume is specified at the cold endpoint. No system-container expansion
 // credit is taken because its materials and temperature distribution are unknown.
 export function sizeExpansion({ systemVol, fillTemp, designTemp, minPressure, maxPressure,
-  precharge, acceptanceLimit, atmosphericPsia = 14.7, polytropicExponent = 1 }) {
-  positive(systemVol, 'System water volume');
-  temperatureF(fillTemp); temperatureF(designTemp);
+  precharge, acceptanceLimit, atmosphericPsia = 14.7, polytropicExponent = 1,
+  fluidId = 'water', concentrationPercent = 0 }) {
+  positive(systemVol, 'System fluid volume');
+  fluidTemperatureF(fluidId, concentrationPercent, fillTemp, 'Minimum fluid temperature');
+  fluidTemperatureF(fluidId, concentrationPercent, designTemp, 'Maximum fluid temperature');
   if (designTemp <= fillTemp) throw new RangeError('Maximum fluid temperature must exceed the minimum fluid temperature. Include chilled-loop shutdown warm-up.');
   positive(minPressure, 'Minimum pressure', true); positive(maxPressure, 'Maximum pressure');
   positive(precharge, 'Precharge', true); positive(atmosphericPsia, 'Atmospheric pressure');
@@ -21,17 +25,12 @@ export function sizeExpansion({ systemVol, fillTemp, designTemp, minPressure, ma
   if (polytropicExponent < 1 || polytropicExponent > 1.4) throw new RangeError('Gas exponent must be between 1 and 1.4.');
   if (maxPressure <= minPressure) throw new RangeError('Maximum pressure must exceed minimum pressure.');
   if (precharge > minPressure) throw new RangeError('Precharge must not exceed the minimum system pressure for this sizing model.');
-  const first = waterAtF(fillTemp, minPressure, atmosphericPsia);
-  const last = waterAtF(designTemp, minPressure, atmosphericPsia);
-  // Find the density maximum, including the anomaly near 39 °F. Water density
-  // at a fixed liquid pressure is unimodal over this temperature interval.
-  let lo = fillTemp, hi = designTemp;
-  for (let i = 0; i < 65; i++) {
-    const a = lo + (hi - lo) / 3, b = hi - (hi - lo) / 3;
-    if (waterAtF(a, minPressure, atmosphericPsia).rho < waterAtF(b, minPressure, atmosphericPsia).rho) lo = a;
-    else hi = b;
-  }
-  const maxRho = Math.max(first.rho, last.rho, waterAtF((lo + hi) / 2, minPressure, atmosphericPsia).rho);
+  const first = fluidAtF(fluidId, concentrationPercent, fillTemp, minPressure, atmosphericPsia);
+  const last = fluidAtF(fluidId, concentrationPercent, designTemp, minPressure, atmosphericPsia);
+  // The density maximum can lie inside the interval, at the water anomaly near
+  // 39 °F. Glycol solutions fall monotonically, so their maximum is the cold
+  // endpoint. Both are covered without assuming which one governs.
+  const maxRho = maxDensityBetween(fluidId, concentrationPercent, fillTemp, designTemp, minPressure, atmosphericPsia);
   const minRho = Math.min(first.rho, last.rho);
   const netExpansionFactor = first.rho / minRho - first.rho / maxRho;
   const expandedWater = systemVol * netExpansionFactor;
@@ -45,26 +44,80 @@ export function sizeExpansion({ systemVol, fillTemp, designTemp, minPressure, ma
     atmosphericPsia, polytropicExponent, acceptanceLimit, coldWaterFraction, pressureWaterFraction,
     hotWaterFraction, acceptanceFactor, netExpansionFactor, expandedWater,
     grossExpansion: netExpansionFactor, pipingExpansion: 0, dpf: 1 / acceptanceFactor,
-    minTankVol: expandedWater / acceptanceFactor, minRho, maxRho, referenceDensity: first.rho };
+    minTankVol: expandedWater / acceptanceFactor, minRho, maxRho, referenceDensity: first.rho,
+    fluidId, concentrationPercent, fluidLabel: fluidLabel(fluidId, concentrationPercent),
+    freezePointF: freezePointF(fluidId, concentrationPercent) };
 }
 
 // Source output and load are positive magnitudes for both heating and cooling.
 // Existing volume must be active during the controlling minimum-load cycle.
 export function sizeBuffer({ sourceOutput, minimumLoad, runtimeMin, lowTemp, highTemp,
-  minPressure, existingVolume = 0, utilization = 1, atmosphericPsia = 14.7 }) {
+  minPressure, existingVolume = 0, utilization = 1, atmosphericPsia = 14.7,
+  fluidId = 'water', concentrationPercent = 0 }) {
   positive(sourceOutput, 'Minimum stable source output'); positive(minimumLoad, 'Coincident minimum load', true);
   positive(runtimeMin, 'Minimum run time'); positive(existingVolume, 'Active existing water volume', true);
   fraction(utilization, 'Usable buffer fraction');
   if (highTemp <= lowTemp) throw new RangeError('Upper buffer control temperature must exceed the lower control temperature.');
-  const cold = waterAtF(lowTemp, minPressure, atmosphericPsia), hot = waterAtF(highTemp, minPressure, atmosphericPsia);
+  const cold = fluidAtF(fluidId, concentrationPercent, lowTemp, minPressure, atmosphericPsia);
+  const hot = fluidAtF(fluidId, concentrationPercent, highTemp, minPressure, atmosphericPsia);
   const netOutput = Math.max(0, sourceOutput - minimumLoad);
   const energyBtu = netOutput * runtimeMin / 60;
   const btuPerGal = hot.rho / GAL_PER_FT3 * (hot.h - cold.h);
-  positive(btuPerGal, 'Water heat-storage capacity');
+  positive(btuPerGal, 'Fluid heat-storage capacity');
   const totalActiveVolume = energyBtu / btuPerGal;
   const minTankVol = Math.max(0, totalActiveVolume - existingVolume) / utilization;
   return { kind: 'buffer', sourceOutput, minimumLoad, runtimeMin, lowTemp, highTemp, minPressure,
-    existingVolume, utilization, netOutput, energyBtu, btuPerGal, totalActiveVolume, minTankVol };
+    existingVolume, utilization, netOutput, energyBtu, btuPerGal, totalActiveVolume, minTankVol,
+    fluidId, concentrationPercent, fluidLabel: fluidLabel(fluidId, concentrationPercent),
+    freezePointF: freezePointF(fluidId, concentrationPercent) };
+}
+
+// Well-water and pressure-booster tanks. The pump must run long enough on each
+// start to avoid short cycling, and only the water exchanged between the
+// cut-in and cut-out switch settings is available to supply that run. The
+// drawdown fraction is the same Boyle's-law gas compression as expansion
+// acceptance, evaluated at the pressure-switch settings rather than at the
+// system operating range, so one gas model serves both.
+export function sizeDrawdown({ pumpFlow, cutIn, cutOut, runtimeMin, precharge, acceptanceLimit,
+  atmosphericPsia = 14.7, polytropicExponent = 1 }) {
+  positive(pumpFlow, 'Pump capacity at the cut-out pressure');
+  positive(runtimeMin, 'Minimum pump run time');
+  positive(cutIn, 'Pressure-switch cut-in'); positive(cutOut, 'Pressure-switch cut-out');
+  positive(precharge, 'Actual empty-tank precharge', true); positive(atmosphericPsia, 'Atmospheric pressure');
+  fraction(acceptanceLimit, 'Supplier maximum water-acceptance fraction');
+  finite(polytropicExponent, 'Gas exponent');
+  if (polytropicExponent < 1 || polytropicExponent > 1.4) throw new RangeError('Gas exponent must be between 1 and 1.4.');
+  if (cutOut <= cutIn) throw new RangeError('Cut-out pressure must exceed cut-in pressure.');
+  // A precharge above cut-in empties the tank before the switch closes, so the
+  // pump restarts against an empty tank and the drawdown is not delivered.
+  if (precharge > cutIn) throw new RangeError('Precharge must not exceed the cut-in pressure, or the tank is empty before the pump restarts.');
+  const p0 = precharge + atmosphericPsia, pIn = cutIn + atmosphericPsia, pOut = cutOut + atmosphericPsia;
+  const lowWaterFraction = 1 - (p0 / pIn) ** (1 / polytropicExponent);
+  const pressureWaterFraction = 1 - (p0 / pOut) ** (1 / polytropicExponent);
+  const highWaterFraction = Math.min(pressureWaterFraction, acceptanceLimit);
+  const drawdownFactor = highWaterFraction - lowWaterFraction;
+  if (drawdownFactor <= 0) throw new RangeError('The precharge and acceptance limit leave no drawdown between the switch settings.');
+  const requiredDrawdown = pumpFlow * runtimeMin;
+  // Cycle time is shortest when demand is half the pump capacity, giving a
+  // cycle of 4 x drawdown / pump capacity. That worst case sets starts per hour.
+  const maxStartsPerHour = 60 * pumpFlow / (4 * requiredDrawdown);
+  return { kind: 'drawdown', pumpFlow, cutIn, cutOut, runtimeMin, precharge, atmosphericPsia,
+    polytropicExponent, acceptanceLimit, lowWaterFraction, pressureWaterFraction, highWaterFraction,
+    drawdownFactor, requiredDrawdown, maxStartsPerHour, minTankVol: requiredDrawdown / drawdownFactor };
+}
+
+// Heaviest credible liquid fill, for static head and support loads. The
+// existing 62.5 lb/ft³ water floor is retained, so a water design is unchanged;
+// a denser glycol solution raises it. Without a stated minimum fluid
+// temperature the coldest supported state is used, which is conservative for a
+// load case.
+export function designLiquidDensity({ fluidId = 'water', concentrationPercent = 0, coldTempF,
+  hotTempF, minPressure, atmosphericPsia = 14.7 }) {
+  const fluid = FLUIDS[fluidId];
+  if (!fluid) throw new RangeError('Select a supported heat-transfer fluid.');
+  const floor = fluid.glycol ? Math.max(fluid.minTempF, freezePointF(fluidId, concentrationPercent)) : fluid.minTempF;
+  const lo = Math.min(Number.isFinite(coldTempF) ? coldTempF : floor, hotTempF);
+  return Math.max(62.5, maxDensityBetween(fluidId, concentrationPercent, lo, hotTempF, minPressure, atmosphericPsia));
 }
 
 function pressureInputs(P, R, S, E, CA) {
@@ -138,11 +191,12 @@ export function calcFrictionFactor(Re, epsilon, D) {
   return Re < 4000 ? (1 - (Re - 2300) / 1700) * 64 / 2300 + (Re - 2300) / 1700 * ft : ft;
 }
 export function calcNozzleFlow({ Q_gpm, d_in, tempF, pressurePsig, atmosphericPsia = 14.7,
-  materialId, nozzleLength, service, velocityLimit = 8 }) {
+  materialId, nozzleLength, service, velocityLimit = 8, fluidId = 'water', concentrationPercent = 0 }) {
   positive(Q_gpm, 'Nozzle flow', true); positive(d_in, 'Nozzle bore'); positive(nozzleLength, 'Nozzle length', true);
   positive(velocityLimit, 'Velocity target');
   if (!MATERIALS[materialId]) throw new RangeError('Unknown nozzle material.');
-  const water = waterAtF(tempF, pressurePsig, atmosphericPsia), mu_cP = waterViscosityCP(tempF);
+  const water = fluidAtF(fluidId, concentrationPercent, tempF, pressurePsig, atmosphericPsia);
+  const mu_cP = fluidViscosityCP(fluidId, concentrationPercent, tempF);
   const mu_lbfts = mu_cP * 0.000671968975;
   const A_in2 = Math.PI * d_in * d_in / 4, A_ft2 = A_in2 / 144, D_ft = d_in / 12;
   const v_fps = Q_gpm / (60 * GAL_PER_FT3) / A_ft2;
@@ -154,7 +208,7 @@ export function calcNozzleFlow({ Q_gpm, d_in, tempF, pressurePsig, atmosphericPs
   const dynamicPsi = water.rho * v_fps ** 2 / (2 * 32.174048556 * 144);
   const dP_friction_psi = f_darcy * nozzleLength / 12 / D_ft * dynamicPsi;
   const dP_minor_psi = K_total * dynamicPsi;
-  return { Q_gpm, d_in, tempF, rho: water.rho, mu_cP, mu_lbfts, A_in2, A_ft2, v_fps, Re, epsilon,
+  return { Q_gpm, d_in, tempF, fluidId, concentrationPercent, rho: water.rho, mu_cP, mu_lbfts, A_in2, A_ft2, v_fps, Re, epsilon,
     flowRegime: Re === 0 ? 'No flow' : Re < 2300 ? 'Laminar' : Re < 4000 ? 'Transitional estimate' : 'Turbulent',
     f_darcy, K_total, dP_friction_psi, dP_minor_psi, dP_total_psi: dP_friction_psi + dP_minor_psi,
     nozzleLength, velocityOK: v_fps <= velocityLimit, velocityLimit };
@@ -192,16 +246,20 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   const { designTempF, operatingTempF = designTempF, minPressure, shellStress: plateStress, pipeStress, headStress, nozzleStress,
     shellE, circumferentialE, headE, headFormingLoss = 0.1, plateTolerance = 0.01,
     codeEdition, stressBasis, designFlowGPM = 0, expansionFlowGPM = 0, velocityLimit = 8,
-    atmosphericPsia = 14.7, supportType = 'skirt', prelim = null } = params;
+    atmosphericPsia = 14.7, supportType = 'skirt', prelim = null,
+    fluidId = 'water', concentrationPercent = 0, coldTempF } = params;
   const material = MATERIALS[materialId];
   if (!material || !product) throw new RangeError('Select a supported material and product.');
   if (designPressure > Math.max(...product.mawpOptions)) throw new RangeError('Design pressure exceeds the selected product calculation envelope.');
-  temperatureF(designTempF); temperatureF(operatingTempF);
+  temperatureF(designTempF);
+  fluidTemperatureF(fluidId, concentrationPercent, operatingTempF, 'Maximum fluid temperature');
   if (designTempF < operatingTempF) throw new RangeError('Design metal temperature must cover the operating fluid temperature.');
   if (operatingTempF > product.maxTemp) throw new RangeError('Fluid temperature exceeds the selected product envelope.');
   if (product.internals !== 'none' && designTempF > product.maxTemp) throw new RangeError('Design temperature exceeds the membrane product envelope.');
-  waterAtF(operatingTempF, minPressure, atmosphericPsia);
+  fluidAtF(fluidId, concentrationPercent, operatingTempF, minPressure, atmosphericPsia);
   if (minPressure > designPressure) throw new RangeError('Operating pressure exceeds top design pressure.');
+  const liquidDensity = designLiquidDensity({ fluidId, concentrationPercent, coldTempF,
+    hotTempF: operatingTempF, minPressure, atmosphericPsia });
   for (const [value, name] of [[plateStress,'Plate-shell allowable stress'],[pipeStress,'Pipe-shell allowable stress'],[headStress,'Head allowable stress'],[nozzleStress,'Nozzle allowable stress']]) positive(value,name);
   fraction(shellE,'Shell longitudinal-seam efficiency'); fraction(circumferentialE,'Circumferential-seam efficiency'); fraction(headE,'Head efficiency');
   positive(CA,'Corrosion allowance',true); positive(plateTolerance,'Plate thickness deduction',true);
@@ -248,8 +306,9 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
     headDepthID = D_ID / 4;
     shellLength = Math.ceil(Math.max(isPipe ? 4 : 6,(targetVolGal - 2 * ellipsoidalHeadVolume(D_ID)) * 231 * 4 / (Math.PI * D_ID * D_ID)) * 2) / 2;
     OAL = shellLength + 2 * headDepthID + 2 * tHead;
-    // Conservative full-water head on every pressure part at 62.5 lb/ft³.
-    staticHeadPsi = 62.5 * OAL / 12 / 144;
+    // Conservative full-liquid head on every pressure part, at the heaviest
+    // credible fill density rather than a fixed water value.
+    staticHeadPsi = liquidDensity * OAL / 12 / 144;
     const next = designPressure + staticHeadPsi;
     if (Math.abs(next - P) < 1e-8) { converged = true; break; }
     P = next;
@@ -271,6 +330,7 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   if (!isBuffer) requirements.push('Use the supplier membrane acceptance rating, temperature rating, compatible port arrangement and installation procedure. Shell-side drains must not be connected as water drains across the membrane.');
   if (!isBuffer && expansionFlowGPM === 0) requirements.push('Peak expansion/displacement flow was not supplied. The system port has a preliminary minimum size and no velocity verification.');
   if (product.potable) requirements.push('Confirm potable-water certification for the actual wetted assembly.');
+  if (FLUIDS[fluidId].glycol) requirements.push(`Glycol service: confirm inhibitor package, membrane and gasket compatibility, concentration control and the actual field concentration. Sizing uses the ${fluidLabel(fluidId, concentrationPercent)} correlation for density, specific heat and viscosity only. Inhibitor depletion, corrosion behavior and heat-transfer performance of the installed system are not established here.`);
   const defs = isBuffer ? [
     ['N1','Inlet','buffer-in','top-head',2,designFlowGPM], ['N2','Outlet','buffer-out','bottom-head',2,designFlowGPM],
     ['N3','Drain','drain','bottom-side',0.5,0], ['N4','Vent / Gauge','vent','top-side',0.75,0],
@@ -285,7 +345,7 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
     const n = selectFlowNozzle(minSize,Q,P,nozzleStress,CA,velocityLimit);
     const nozzleLength = (position.includes('head') ? tHead : tShell) + 2;
     const flow = Q > 0 ? calcNozzleFlow({Q_gpm:Q,d_in:n.bore,tempF:operatingTempF,pressurePsig:minPressure,
-      atmosphericPsia,materialId,nozzleLength,service,velocityLimit}) : null;
+      atmosphericPsia,materialId,nozzleLength,service,velocityLimit,fluidId,concentrationPercent}) : null;
     return {id,label,service,position,size:n.size,nozzleOD:n.od,tn:n.sch80,d_opening:n.od - 2*n.minWall + 2*CA,
       minWall:n.minWall,pressureRequired:n.pressureRequired,schedule:'Sch. 80 (B36.10 wall)',rating:'TBD',
       connType:'Pipe neck with rated end fitting TBD',connSpec:'End fitting / flange class requires selection',nozzleMat:prelim?.nozzleSpec ?? material.pipe.spec,
@@ -309,12 +369,13 @@ export function designVessel(targetVolGal, designPressure, product, materialId, 
   const clipCount = D_OD <= 20 ? 3 : 4, clipH = Math.max(3,Math.round(skirtHeight*0.6)), clipW = Math.max(2,Math.round(D_OD*0.08));
   const clipWeight = clipCount*clipH*clipW*skirtThk*material.density*2;
   const emptyWeight = Math.ceil(shellWeight+headWeight+nozzleWeight+skirtWeight), emptyWeightClips = Math.ceil(shellWeight+headWeight+nozzleWeight+clipWeight);
-  const waterWeight = Math.ceil(actualVolGal/GAL_PER_FT3*62.5);
+  const waterWeight = Math.ceil(actualVolGal/GAL_PER_FT3*liquidDensity);
   return {prelim,isPipe,constructionType:prelim ? `${isPipe ? 'NPS '+prelim.result.plate.nps+' '+prelim.result.plate.schedule+' '+prelim.result.inp.pipe_product_form+' pipe' : D_ID.toFixed(3)+' in ID rolled plate'} shell` : isPipe ? `NPS ${choice.nps} ${pipeSchedule.schedule} Seamless Pipe Shell` : `${D_ID}" ID Rolled Plate Shell`,
     headType:prelim ? ({ellipsoidal:'Formed 2:1 Ellipsoidal',hemispherical:'Formed Hemispherical',torispherical:'Formed ASME F&D',pipecap:'B16.9 cap (supplier geometry and rating required)'})[prelim.result.inp.head_type] : 'Formed 2:1 Ellipsoidal',shellSpec,headSpec,D_ID,D_OD,tShell,tHead,tShellCalc,tHeadCalc,shellMin,headMin,
     shellJointEff:prelim?.result.e_circ ?? (isPipe ? 1 : shellE),circumferentialE:prelim?.longE ?? circumferentialE,headE:prelim?.headE ?? headE,shellLength,headDepthID,OAL,actualVolGal,targetVolGal,
     nozzles,emptyWeight,emptyWeightClips,waterWeight,operatingWeight:emptyWeight+waterWeight,operatingWeightClips:emptyWeightClips+waterWeight,
     material,materialId,CA,pipeSchedule,designPressure,componentPressure:P,staticHeadPsi,designTempF,operatingTempF,minPressure,
+    fluidId,concentrationPercent,fluidLabel:fluidLabel(fluidId,concentrationPercent),liquidDensity,
     shellStress,headStress,nozzleStress,headFormingLoss:prelim?.headFormingLoss ?? headFormingLoss,plateTolerance:prelim ? 0 : plateTolerance,codeEdition:String(codeEdition),stressBasis:String(stressBasis),
     shellCapacity,headCapacity,pressureScreenPass,requirements,releaseReady:false,supportType,
     skirt:{OD:D_OD,thk:skirtThk,height:skirtHeight,openingW,openingH,baseRingThk,baseRingW,weight:skirtWeight,matSpec:shellSpec},

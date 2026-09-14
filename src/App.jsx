@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MATERIALS } from './engineering-data.js';
 import { PRODUCTS } from './products.js';
 import { DEFAULT_INPUTS, evaluateDesign } from './design-state.js';
+import { FLUIDS, freezePointF } from './fluid.js';
+import { SystemVolumeEstimator, SourceStepHelper } from './sizing-helpers.jsx';
 import { generateReportHTML } from './report.js';
 import QuoteWorkbench from './quoting/QuoteWorkbench.jsx';
 import { newSession, loadProject } from './quoting/project.js';
@@ -27,7 +29,7 @@ function VesselSVG({ vessel, product, sizing, supportType = "skirt" }) {
   const shellBot = shellTop + sh;
   const botY = shellBot + hd;
 
-  const acceptVol = sizing?.expandedWater || sizing?.acceptanceVolGal || 0;
+  const acceptVol = sizing?.expandedWater || sizing?.requiredDrawdown || sizing?.acceptanceVolGal || 0;
   const totalVol = vessel.actualVolGal || 1;
   const bladderFrac = product.internals === "none" ? 0.85 :
     product.internals === "full-bladder" ? 0.85 :
@@ -296,6 +298,10 @@ export default function App() {
   const state = useMemo(() => evaluateDesign({product,inputs,sizingMode,tankVol,materialId,CA,supportType}),
     [product,inputs,sizingMode,tankVol,materialId,CA,supportType]);
   const {vessel:v,sizing,error,effectiveTankVol} = state;
+  const fluid = FLUIDS[inputs.fluidId] ?? FLUIDS.water;
+  let freezeNote = null;
+  try { freezeNote = fluid.glycol ? `Solution freeze point ${freezePointF(inputs.fluidId,Number(inputs.concentrationPercent)).toFixed(1)} °F. This is the correlation freeze point, not a burst-protection rating and not an inhibitor qualification.` : null; }
+  catch { freezeNote = null; }
   const update = (key,value) => setInputs(prev => ({...prev,[key]:value,
     ...(key === 'designTemp' || key === 'codeEdition' ? {shellStress:'',pipeStress:'',headStress:'',nozzleStress:'',stressBasis:''} : {})}));
   const field = (key,label,unit,hint,text = false) => <Field key={key} label={label} value={inputs[key]} onChange={value => update(key,value)} unit={unit} hint={hint} text={text} />;
@@ -350,7 +356,7 @@ export default function App() {
     {!product ? <main className="products"><h1>Select a product line</h1><p>Water expansion, buffer energy sizing and prelim ASME vessel sizing.</p>
       <p><button className="secondary" onClick={()=>document.getElementById('open-quote-project').click()}>Open saved quote project</button><input hidden id="open-quote-project" type="file" accept=".json" onChange={openQuoteProject}/></p>
       {quoteLoadError&&<div className="notice" role="alert">{quoteLoadError}</div>}
-      <div className="notice">Calculations require a project pressure/temperature basis. Prelim supplies preliminary material curves and mechanical sizing, or you can enter verified allowable stresses. Schematics and component selections remain preliminary until the outstanding vessel checks are completed. Fluid model: pure liquid water.</div>
+      <div className="notice">Calculations require a project pressure/temperature basis. Prelim supplies preliminary material curves and mechanical sizing, or you can enter verified allowable stresses. Schematics and component selections remain preliminary until the outstanding vessel checks are completed. Fluid model: liquid water, aqueous ethylene glycol and aqueous propylene glycol.</div>
       <div className="product-grid">{PRODUCTS.map(p => <button className="product-card" key={p.id} onClick={() => {setSelProduct(p.id);setInputs({...DEFAULT_INPUTS,mawp:p.defaultMawp});}}>
         <h2 style={{color:p.color}}>{p.name}</h2><b>{p.subtitle}</b><p>{p.desc}</p><small>{p.internals === 'none' ? 'Energy balance or direct volume' : 'Pressure and membrane acceptance sizing'}</small>
       </button>)}</div></main> : <>
@@ -361,26 +367,42 @@ export default function App() {
           <div className="toggle">{[0,0.0625,0.125].map(c => <button key={c} className={CA === c ? 'active' : ''} onClick={() => setCA(c)}>CA {c}"</button>)}</div>
           <label className="field">Support concept<select aria-label="Support concept" value={supportType} onChange={e => setSupportType(e.target.value)}><option value="skirt">Skirt</option><option value="clips">Mounting clips</option></select></label>
         </Section>
-        <Section title="Thermal sizing method"><div className="toggle"><button className={sizingMode === 'tank' ? 'active' : ''} onClick={() => setSizingMode('tank')}>Direct volume</button><button className={sizingMode === 'system' ? 'active' : ''} onClick={() => setSizingMode('system')}>{isBuffer ? 'Energy balance' : 'Size for system'}</button></div>
+        <Section title="Thermal sizing method"><div className="toggle"><button className={sizingMode === 'tank' ? 'active' : ''} onClick={() => setSizingMode('tank')}>Direct volume</button><button className={sizingMode === 'system' ? 'active' : ''} onClick={() => setSizingMode('system')}>{isBuffer ? 'Energy balance' : 'Size for system'}</button>{!isBuffer && <button className={sizingMode === 'drawdown' ? 'active' : ''} onClick={() => setSizingMode('drawdown')}>Pump drawdown</button>}</div>
           {sizingMode === 'tank' ? <><Field label="Required tank volume" value={tankVol === '' ? '' : Number(tankVol)*(tankVolUnit === 'L' ? 3.785411784 : 1)} unit={tankVolUnit} onChange={value => setTankVol(value === '' ? '' : Number(value)/(tankVolUnit === 'L' ? 3.785411784 : 1))} />
-            <div className="toggle">{['gal','L'].map(u => <button key={u} className={tankVolUnit === u ? 'active' : ''} onClick={() => setTankVolUnit(u)}>{u === 'gal' ? 'US gallons' : 'Litres'}</button>)}</div><small>Direct volume does not verify system thermal capacity.</small></> : isBuffer ? <>
+            <div className="toggle">{['gal','L'].map(u => <button key={u} className={tankVolUnit === u ? 'active' : ''} onClick={() => setTankVolUnit(u)}>{u === 'gal' ? 'US gallons' : 'Litres'}</button>)}</div><small>Direct volume does not verify system thermal capacity.</small></> : sizingMode === 'drawdown' ? <>
+            {field('pumpFlowGPM','Pump capacity at cut-out','GPM','Delivered flow at the cut-out pressure, not the catalog peak.')}
+            {field('pumpRuntimeMin','Minimum pump run time per start','min','Set by the motor manufacturer. A longer required run needs more drawdown.')}
+            {field('cutInPressure','Pressure-switch cut-in','psig')}
+            {field('cutOutPressure','Pressure-switch cut-out','psig','Must be bracketed by the operating pressure basis below.')}
+            {field('precharge','Actual empty-tank precharge','psig','At the tank datum with the tank drained. Normally set just below cut-in; a precharge above cut-in is rejected.')}
+            {field('acceptancePercent','Supplier maximum water acceptance','% of tank','Supplier maximum acceptance volume divided by nominal tank volume.')}
+            {field('gasExponent','Gas polytropic exponent','n','1 is isothermal. Values up to 1.4 can screen faster compression.')}
+          </> : isBuffer ? <>
+            <SourceStepHelper onApply={value => update('sourceOutput',value)} />
             {field('sourceOutput','Minimum stable source output','Btu/hr','Use the active chiller or boiler stage, as a positive magnitude.')}
             {field('minimumLoad','Coincident minimum load','Btu/hr')}{field('runtimeMin','Minimum source run time','min')}
             {field('bufferLowTemp','Lower tank control temperature','°F')}{field('bufferHighTemp','Upper tank control temperature','°F','Use the control deadband, not the supply/return design difference.')}
             {field('existingVolume','Existing active system volume','US gal')}{field('utilizationPercent','Usable buffer volume','%','100% assumes the full tank participates in the cycle.')}
           </> : <>
-            {field('systemVol',product.potable ? 'Heated water system volume' : 'System water volume','US gal','Volume at the minimum-temperature endpoint, including active components.')}
+            {field('systemVol',product.potable ? 'Heated fluid system volume' : 'System fluid volume','US gal','Volume at the minimum-temperature endpoint, including active components.')}
+            <SystemVolumeEstimator onApply={value => update('systemVol',value)} />
             {field('fillTemp','Minimum fluid temperature','°F','Use the coldest liquid state. The water-density maximum is included if crossed.')}
             {field('precharge','Actual empty-tank precharge','psig','At the tank datum. Set with no water pressure on the tank.')}
             {field('acceptancePercent','Supplier maximum water acceptance','% of tank','Required for diaphragm, partial and full bladder designs. Use supplier maximum acceptance volume divided by nominal tank volume.')}
             {field('gasExponent','Gas polytropic exponent','n','1 is isothermal. Values up to 1.4 can screen faster compression.')}
           </>}
-          {sizing && <div className="notice"><b>Thermal result</b>{sizing.kind === 'expansion' && <><Row label="Expanded water">{format(sizing.expandedWater)} gal</Row><Row label="Usable acceptance">{format(sizing.acceptanceFactor,5)}</Row></>}
+          {sizing && <div className="notice"><b>Thermal result</b>{sizing.kind === 'expansion' && <><Row label="Expanded fluid">{format(sizing.expandedWater)} gal</Row><Row label="Usable acceptance">{format(sizing.acceptanceFactor,5)}</Row></>}
+            {sizing.kind === 'drawdown' && <><Row label="Required drawdown">{format(sizing.requiredDrawdown)} gal</Row><Row label="Usable drawdown fraction">{format(sizing.drawdownFactor,5)}</Row><Row label="Worst-case starts/hour">{format(sizing.maxStartsPerHour,2)}</Row></>}
             <Row label="Minimum tank volume">{format(sizing.minTankVol)} gal</Row><Row label="Selected with 5% allowance">{effectiveTankVol} gal</Row>
             {effectiveTankVol === 0 && <p>No additional buffer volume is required by this cycling case.</p>}</div>}
         </Section>
         <Section title="Operating and pressure basis">
-          {field('operatingTemp','Maximum fluid temperature','°F','Include chilled-loop shutdown warm-up. Pure water only.')}
+          <label className="field">Heat-transfer fluid<select aria-label="Heat-transfer fluid" value={inputs.fluidId}
+            onChange={e => setInputs(prev => ({...prev,fluidId:e.target.value,concentrationPercent:e.target.value === 'water' ? 0 : (Number(prev.concentrationPercent) || 30)}))}>
+            {Object.values(FLUIDS).map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</select></label>
+          {fluid.glycol && <>{field('concentrationPercent','Glycol concentration','mass %','Confirm the concentration actually in the system. Expansion, stored energy, density and viscosity all move with it.')}
+            {freezeNote && <div className="notice">{freezeNote}</div>}</>}
+          {field('operatingTemp','Maximum fluid temperature','°F',`Include chilled-loop shutdown warm-up. ${fluid.glycol ? 'Aqueous glycol is supported from 0 to 212 °F.' : 'Water is supported from 32 to 450 °F.'}`)}
           {field('designTemp','Design metal temperature','°F','Must cover the fluid temperature. Changing it clears allowable stresses.')}
           {field('minPressure','Minimum operating pressure at tank','psig')}{field('maxPressure','Maximum operating pressure at tank','psig')}
           {field('reliefPressure','Relief set pressure at tank datum','psig')}{field('reliefMargin','Operating margin below relief','psi')}

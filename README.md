@@ -1,13 +1,13 @@
 # JWT Tank Designer, Sizer & Quoting v2.1
 
 **Joe White Tank Company, Inc. — Fort Worth, Texas**  
-Water expansion, buffer energy sizing, and preliminary ASME VIII-1 mechanical sizing using the prelim engine. Full vessel MAWP and fabrication release are not established by this app.
+Expansion, pump drawdown, buffer energy sizing, and preliminary ASME VIII-1 mechanical sizing using the prelim engine. Water, ethylene glycol and propylene glycol are supported. Full vessel MAWP and fabrication release are not established by this app.
 
 **Build quote** adds an adjustable vessel/package budget, live price recalculation, optional equipment, historical price-package import, configurable price feeds, project save/resume, and internal/customer exports. Start by importing your private quoting ZIP in **Rates & catalog**. See the [quoting guide](docs/QUOTING.md) for the workflow, formulas, feed contract and scope limits.
 
-See [the prelim integration](docs/PRELIM_INTEGRATION.md) for the source revision, implemented calculations, validation and limitations. The [earlier engineering audit](docs/ENGINEERING_AUDIT.md) records the original thermal and pressure-wall corrections.
+See [fluids and sizing](docs/FLUIDS_AND_SIZING.md) for the fluid property model and its validation, pump drawdown sizing and the system-volume estimator. See [the prelim integration](docs/PRELIM_INTEGRATION.md) for the source revision, implemented calculations, validation and limitations. The [earlier engineering audit](docs/ENGINEERING_AUDIT.md) records the original thermal and pressure-wall corrections.
 
-The designer enters the project pressure/temperature basis and supplier membrane acceptance. Prelim supplies temperature-dependent preliminary material curves, stock selection, radiography, MDMT, PWHT and optional vacuum screening. An alternative entered-stress mode accepts project Section II-D values. Glycol and two-phase operation are outside the water model. Unsupported or incomplete inputs block a vessel result.
+The designer enters the project pressure/temperature basis, the heat-transfer fluid and supplier membrane acceptance. Prelim supplies temperature-dependent preliminary material curves, stock selection, radiography, MDMT, PWHT and optional vacuum screening. An alternative entered-stress mode accepts project Section II-D values. Two-phase operation and fluids other than water and aqueous glycol are outside the property model. Unsupported or incomplete inputs block a vessel result.
 
 ## Deployment
 
@@ -51,7 +51,10 @@ Regression checks and production build run on pull requests. The deployment buil
 - **Procurement estimates**: Stock, courses, segments, pipe joints, drop, weight and estimating costs
 - **Calculation JSON export** with source revision and complete results
 - **Alternative entered-stress wall calculations**: Shell hoop and longitudinal checks (UG-27), ideal 2:1 head (UG-32), corroded dimensions, static head, pipe mill tolerance and forming allowance
-- **IAPWS water properties** for expansion, buffer energy balance and liquid-phase validation
+- **Fluid properties**: IAPWS-IF97 water plus CoolProp aqueous ethylene/propylene glycol density, specific heat, viscosity and freeze point, driving expansion, buffer energy, static head, weights and nozzle hydraulics
+- **Pump drawdown sizing** for well-water and pressure-booster tanks, from pump capacity, run time and pressure-switch settings
+- **System volume estimator**: pipe takeoff from bore geometry plus entered equipment volumes and a visible takeoff allowance
+- **Minimum stable output helper** from source rating and equal unloading steps
 - **Membrane acceptance**: Actual precharge, pressure window and supplier acceptance limit
 - **Buffer energy sizing**: Minimum output, coincident load, run time, control deadband and active existing volume
 - **Live schematic vessel visualization** with conceptual internals, nozzles, and dimensions

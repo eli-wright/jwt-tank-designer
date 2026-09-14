@@ -18,8 +18,9 @@ export function prelimNumber(x,label,min=-Infinity,max=Infinity) {
   return Number(x);
 }
 function choice(x,values,label) { if (!values.includes(x)) throw new RangeError(`Select a valid ${label}.`); return x; }
-export function sizeWithPrelim(targetVolGal, pressure, tempF, materialId, corrosion, inputs, autoChoice) {
+export function sizeWithPrelim(targetVolGal, pressure, tempF, materialId, corrosion, inputs, autoChoice, liquidDensity = 62.5) {
   prelimNumber(targetVolGal,'Required tank volume',0.01,1000000);
+  prelimNumber(liquidDensity,'Fill density',20,200);
   const q={...PRELIM_DEFAULTS,...inputs};
   const material=materialKeys[materialId];
   if (!material) throw new RangeError('Unsupported prelim material mapping.');
@@ -31,7 +32,7 @@ export function sizeWithPrelim(targetVolGal, pressure, tempF, materialId, corros
   const inp={...DEFAULT_INPUT,diameter,diameter_basis:choice(q.diameterBasis,['OD','ID'],'diameter basis'),
     pressure:prelimNumber(pressure,'Design pressure',0.01,300),temp_F:prelimNumber(tempF,'Design temperature',32,450),
     material,corrosion:prelimNumber(corrosion,'Corrosion allowance',0,0.5),orientation:'vertical',
-    fluid_sg:62.5/62.4,fill_fraction:1,liquid_level_in:null,construction,head_type:headType,
+    fluid_sg:liquidDensity/62.4,fill_fraction:1,liquid_level_in:null,construction,head_type:headType,
     pipe_product_form:choice(q.pipeProductForm,['seamless','welded'],'pipe product form'),
     cap_weld_exam:choice(q.capWeldExam,['none','a5b','spot','full'],'Category B examination'),
     cap_weld_type:choice(q.capWeldType,['type1','type2'],'Category B weld type'),

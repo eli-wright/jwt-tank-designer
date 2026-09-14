@@ -17,17 +17,20 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
     ['Top design pressure',`${f(v.designPressure)} psig`],['Maximum operating pressure',`${inputs.maxPressure} psig`],
     ['Relief set pressure / margin',`${inputs.reliefPressure} / ${inputs.reliefMargin} psi at tank datum`],
     ['Design metal / maximum fluid temperature',`${v.designTempF} / ${v.operatingTempF} °F`],
+    ['Heat-transfer fluid',v.fluidLabel],
+    ['Fill density used for static head and weights',`${f(v.liquidDensity)} lb/ft³, heaviest credible fill`],
     ['Code edition entered',v.codeEdition],['Allowable-stress table basis entered',v.stressBasis],
     ['Shell / head / nozzle allowable stress',`${v.shellStress} / ${v.headStress} / ${v.nozzleStress} psi at design metal temperature`],
     ['Joint efficiency, shell longitudinal / circumferential / head',`${v.shellJointEff} / ${v.circumferentialE} / ${v.headE}`],
     ['Corrosion allowance',`${v.CA} in, internal corrosion assumed`],
-    ['Empty precharge',isBuffer ? 'Not applicable' : sizing.kind === 'expansion' ? `${sizing.precharge} psig` : 'Not specified for direct-volume selection'],
+    ['Empty precharge',isBuffer ? 'Not applicable' : ['expansion','drawdown'].includes(sizing.kind) ? `${sizing.precharge} psig` : 'Not specified for direct-volume selection'],
   ]);
   if (!v.prelim) body += '<p>Geometry uses a cylinder and two ideal 2:1 ellipsoidal heads. Each head volume is πD³/24. Formed head straight flanges, fabrication tolerances, internal displacement and the installation envelope require the supplier drawings.</p>';
   body += '<h2>2. Thermal sizing</h2>';
   if (sizing.kind === 'expansion') {
-    body += `<p>Pure water, IAPWS-IF97 Region 1. Density is evaluated across the entered temperature range at minimum pressure. Pressure-compression credit and container expansion credit are omitted. The density maximum near 39 °F is included when it lies in the range.</p>`;
+    body += `<p>${sizing.fluidId === 'water' ? 'Pure water, IAPWS-IF97 Region 1.' : `${escapeHTML(sizing.fluidLabel)}, CoolProp incompressible-solution correlation. The solution freeze point is ${f(sizing.freezePointF,1)} °F; confirm the actual field concentration, because expansion, heat capacity and viscosity all move with it.`} Density is evaluated across the entered temperature range at minimum pressure. Pressure-compression credit and container expansion credit are omitted. The water density maximum near 39 °F is included when it lies in the range.</p>`;
     body += table([
+      ['Fluid',sizing.fluidLabel],
       ['System volume at cold endpoint',`${sizing.systemVol} US gal`],['Minimum / maximum fluid temperature',`${sizing.fillTemp} / ${sizing.designTemp} °F`],
       ['Minimum / maximum pressure',`${sizing.minPressure} / ${sizing.maxPressure} psig`],['Atmospheric pressure',`${sizing.atmosphericPsia} psia`],
       ['Density, cold endpoint / maximum / minimum',`${f(sizing.referenceDensity,6)} / ${f(sizing.maxRho,6)} / ${f(sizing.minRho,6)} lb/ft³`],
@@ -41,16 +44,37 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
       fcold = 1 − (Pprecharge,abs / Pmin,abs)^(1/n)<br>
       fhot = min[1 − (Pprecharge,abs / Pmax,abs)^(1/n), supplier acceptance fraction]<br>
       Vtank ≥ ΔV / (fhot − fcold)</div><p>n = 1 assumes isothermal gas. The gas model, precharge at the minimum-volume state, and supplier acceptance limit must match the installation. Maximum operating pressure includes the entered margin below relief.</p>`;
-  } else if (sizing.kind === 'buffer') {
-    body += '<p>Energy balance for minimum source run time. Use the minimum stable source output and coincident minimum load. Temperatures are the tank control deadband. Existing volume includes only the water participating in this cycle.</p>';
+  } else if (sizing.kind === 'drawdown') {
+    body += `<p>Well-water and pressure-booster drawdown. The pump must run for the entered minimum time on each start, and only the water exchanged between the cut-in and cut-out switch settings supplies that run. The drawdown fraction is the same Boyle's-law gas compression used for expansion acceptance, evaluated at the switch settings. Pump capacity must be the delivered flow at the cut-out pressure, not the catalog peak.</p>`;
     body += table([
+      ['Pump capacity at cut-out',`${sizing.pumpFlow} GPM`],['Minimum pump run time per start',`${sizing.runtimeMin} min`],
+      ['Required drawdown',`${f(sizing.requiredDrawdown)} US gal`],
+      ['Cut-in / cut-out pressure',`${sizing.cutIn} / ${sizing.cutOut} psig at tank datum`],
+      ['Actual empty-tank precharge',`${sizing.precharge} psig`],['Atmospheric pressure',`${sizing.atmosphericPsia} psia`],
+      ['Gas exponent n',sizing.polytropicExponent],['Supplier maximum water fraction',f(sizing.acceptanceLimit,6)],
+      ['Water fraction at cut-in',f(sizing.lowWaterFraction,6)],['Pressure-limited fraction at cut-out',f(sizing.pressureWaterFraction,6)],
+      ['Usable drawdown fraction',f(sizing.drawdownFactor,6)],
+      ['Worst-case starts per hour',`${f(sizing.maxStartsPerHour,2)} at a demand of half the pump capacity`],
+      ['Minimum nominal tank volume',`${f(sizing.minTankVol,6)} US gal`],
+      ['Sizing allowance',`5% before upward volume rounding. Selected ${f(v.targetVolGal)} US gal`],
+    ]);
+    body += `<div class="eq">required drawdown = pump capacity × minimum run time<br>
+      fcut-in = 1 − (Pprecharge,abs / Pcut-in,abs)^(1/n)<br>
+      fcut-out = min[1 − (Pprecharge,abs / Pcut-out,abs)^(1/n), supplier acceptance fraction]<br>
+      Vtank ≥ drawdown / (fcut-out − fcut-in)<br>
+      starts/hr = 60 × pump capacity / (4 × drawdown)</div>
+      <p>Precharge is normally set a small margin below cut-in with the tank drained; a precharge above cut-in empties the tank before the pump restarts and is rejected. The starts-per-hour figure is the worst case, which occurs when demand is half the pump capacity. Pump motor starting limits, well yield, drawdown recovery and pressure-switch differential are not evaluated here. Potable service requires the certified wetted assembly.</p>`;
+  } else if (sizing.kind === 'buffer') {
+    body += `<p>Energy balance for minimum source run time, using ${escapeHTML(sizing.fluidLabel)}. Use the minimum stable source output and coincident minimum load. Temperatures are the tank control deadband. Existing volume includes only the fluid participating in this cycle.${sizing.fluidId === 'water' ? '' : ' Glycol stores materially less energy per gallon than water, so the required volume rises.'}</p>`;
+    body += table([
+      ['Fluid',sizing.fluidLabel],
       ['Source output / coincident load',`${sizing.sourceOutput} / ${sizing.minimumLoad} Btu/hr`],['Minimum run time',`${sizing.runtimeMin} min`],
       ['Control temperatures',`${sizing.lowTemp} to ${sizing.highTemp} °F`],['Excess source energy',`${f(sizing.energyBtu)} Btu`],
-      ['Water energy capacity',`${f(sizing.btuPerGal,6)} Btu/US gal`],['Total active volume required',`${f(sizing.totalActiveVolume)} US gal`],
+      ['Fluid energy capacity',`${f(sizing.btuPerGal,6)} Btu/US gal`],['Total active volume required',`${f(sizing.totalActiveVolume)} US gal`],
       ['Existing active water volume',`${sizing.existingVolume} US gal`],['Usable buffer fraction',sizing.utilization],
       ['Additional tank volume required',`${f(sizing.minTankVol)} US gal`],['Selected volume including 5% allowance',`${f(v.targetVolGal)} US gal`],
     ]);
-    body += '<div class="eq">Energy = max(Qsource − Qload, 0) × runtime / 60<br>Capacity per gallon = ρhot / 7.48051948 × (hhot − hcold)<br>Vtotal = Energy / Capacity per gallon<br>Vbuffer = max(Vtotal − Vexisting, 0) / usable fraction</div><p>Enthalpy and density use IAPWS-IF97 at minimum operating pressure. For near-ambient water this approaches V = runtime × (Qsource − Qload) / (500 × ΔT). This is a cycling-volume calculation. Ride-through or stratified thermal storage needs a separate operating case.</p>';
+    body += '<div class="eq">Energy = max(Qsource − Qload, 0) × runtime / 60<br>Capacity per gallon = ρhot / 7.48051948 × (hhot − hcold)<br>Vtotal = Energy / Capacity per gallon<br>Vbuffer = max(Vtotal − Vexisting, 0) / usable fraction</div><p>Water enthalpy and density use IAPWS-IF97 at minimum operating pressure; glycol uses the CoolProp incompressible-solution correlation, whose enthalpy is the integral of its own specific heat. For near-ambient water this approaches V = runtime × (Qsource − Qload) / (500 × ΔT). This is a cycling-volume calculation. Ride-through or stratified thermal storage needs a separate operating case.</p>';
   } else {
     body += `<p>Volume entered directly: ${f(v.targetVolGal)} US gal. System expansion, membrane acceptance and buffer run time have not been sized in this mode.</p>`;
   }
@@ -92,11 +116,12 @@ export function generateReportHTML(product, inputs, sizing, v, logo, diagram = '
   }
   body += '<p>ΔP = [f(L/D) + K] ρv²/(2gc × 144). Laminar f = 64/Re. Turbulent f solves Colebrook. Transition flow and the retained viscosity table are approximate. Losses exclude end fittings, valves and external piping. The velocity target is a project input, not a universal ASHRAE limit. No nozzle heat-transfer coefficient is inferred from a short developing-flow passage.</p>';
   body += '<h2>5. Supports and weight estimates</h2>';
-  body += table([['Support shown',v.supportType],['Empty weight estimate',`${selectedEmpty} lb`],['Full-water contents allowance',`${v.waterWeight} lb`],
-    ['Full-water gross weight estimate',`${selectedEmpty + v.waterWeight} lb`],['Structural status','Supports, anchors, lifting and nozzle loads require analysis']]);
-  body += '<p>Weights include geometric shell/head estimates and approximate attachments. They exclude final bladder/access assemblies, detailed bolting, insulation and piping. Full-water weight is a load case, not an expansion-tank operating liquid level.</p>';
+  body += table([['Support shown',v.supportType],['Empty weight estimate',`${selectedEmpty} lb`],
+    ['Full-liquid contents allowance',`${v.waterWeight} lb of ${escapeHTML(v.fluidLabel)} at ${f(v.liquidDensity)} lb/ft³`],
+    ['Full-liquid gross weight estimate',`${selectedEmpty + v.waterWeight} lb`],['Structural status','Supports, anchors, lifting and nozzle loads require analysis']]);
+  body += '<p>Weights include geometric shell/head estimates and approximate attachments. They exclude final bladder/access assemblies, detailed bolting, insulation and piping. Full-liquid weight is a load case, not an expansion-tank operating liquid level.</p>';
   body += '<h2>6. Outstanding design requirements</h2><ul>' + v.requirements.map(s => `<li>${escapeHTML(s)}</li>`).join('') + '</ul>';
-  body += `<h2>7. References and scope</h2><p><a href="https://iapws.org/technical-guidance/release/IF97-Rev.download">IAPWS-IF97, Regions 1 and 4</a>. <a href="https://www.watts.com/resources/planning/etp">Watts expansion-tank volume and acceptance selection</a>. <a href="https://www.caleffi.com/en-us/blog/design-details-air-water-heat-pump">Caleffi buffer energy-balance sizing</a>. <a href="https://www.asme.org/codes-standards/find-codes-standards/bpvc-viii-1-bpvc-section-viii-rules-construction-pressure-vessels-division-1">ASME VIII-1 scope</a>. <a href="https://www.codeware.com/products/compress/nozzles/">Codeware nozzle design scope</a>.</p><p>The project ASME edition is entered by the designer. Allowable stresses use either the identified prelim reference curves or the entered project values, as recorded in the calculation basis. Licensed code tables, exemptions and full code compliance have not been independently established by this app.</p>`;
+  body += `<h2>7. References and scope</h2><p><a href="https://iapws.org/technical-guidance/release/IF97-Rev.download">IAPWS-IF97, Regions 1 and 4</a>. <a href="https://coolprop.github.io/CoolProp/fluid_properties/Incompressibles.html">CoolProp incompressible aqueous-glycol correlations</a>, used for ethylene and propylene glycol density, specific heat and viscosity. <a href="https://www.watts.com/resources/planning/etp">Watts expansion-tank volume and acceptance selection</a>. <a href="https://www.caleffi.com/en-us/blog/design-details-air-water-heat-pump">Caleffi buffer energy-balance sizing</a>. <a href="https://www.asme.org/codes-standards/find-codes-standards/bpvc-viii-1-bpvc-section-viii-rules-construction-pressure-vessels-division-1">ASME VIII-1 scope</a>. <a href="https://www.codeware.com/products/compress/nozzles/">Codeware nozzle design scope</a>.</p><p>The project ASME edition is entered by the designer. Allowable stresses use either the identified prelim reference curves or the entered project values, as recorded in the calculation basis. Licensed code tables, exemptions and full code compliance have not been independently established by this app.</p>`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>JWT calculation review ${escapeHTML(model)}</title><style>
     *{box-sizing:border-box}body{font-family:Aptos,'Segoe UI',sans-serif;color:#222;background:white;margin:32px;line-height:1.5;font-size:10pt}
     h1{font-size:20pt;color:#8B6914}h2{font-size:13pt;border-left:4px solid #B8860B;padding-left:10px;margin-top:24px}h3{font-size:11pt}
