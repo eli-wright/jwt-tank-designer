@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { waterRegion1, saturationPressureMPa, waterAtF, waterViscosityCP } from '../src/water.js';
-import { sizeExpansion, sizeBuffer, calcShellThickness, calcHead21SE, shellPressureCapacity,
-  headPressureCapacity, roundUpToStdThickness, selectPipeSchedule, calcFrictionFactor,
-  calcNozzleFlow, ellipsoidalHeadVolume, selectDiameter, designVessel } from '../src/engineering.js';
+import { sizeExpansion, sizeBuffer, sizeDrawdown, designLiquidDensity, calcShellThickness,
+  calcHead21SE, shellPressureCapacity, headPressureCapacity, roundUpToStdThickness,
+  selectPipeSchedule, calcFrictionFactor, calcNozzleFlow, ellipsoidalHeadVolume,
+  selectDiameter, designVessel } from '../src/engineering.js';
 import { DEFAULT_INPUTS, evaluateDesign, numberInput } from '../src/design-state.js';
 import { generateReportHTML } from '../src/report.js';
 import { PRODUCTS } from '../src/products.js';
@@ -173,5 +174,99 @@ test('report uses actual inputs, selected support, escaped text and unresolved d
   assert.ok(h.includes('clips'));
   for (const old of ['40-50 ft-lbs','ENGINEERING APPROVAL','automotive tire','2023 Edition','qualifies for the small opening exemption']) assert.ok(!h.includes(old));
   assert.ok(h.includes('Vessel MAWP'));
+  assert.ok(!h.includes('undefined') && !h.includes('NaN') && !h.includes('Infinity'));
+});
+
+// ── Glycol fluids, pump drawdown and the estimators that feed them ──────────
+test('glycol expands more and stores less energy than water, so tanks grow',() => {
+  const water = sizeExpansion(expansion);
+  const glycol = sizeExpansion({...expansion,fluidId:'pg',concentrationPercent:40});
+  assert.ok(glycol.netExpansionFactor > water.netExpansionFactor * 1.2);
+  assert.ok(glycol.minTankVol > water.minTankVol);
+  // Acceptance is a gas-law property of the pressures, so it must not move.
+  near(glycol.acceptanceFactor,water.acceptanceFactor);
+  assert.equal(glycol.fluidLabel,'40% Propylene glycol');
+  assert.ok(glycol.freezePointF < 20);
+
+  const waterBuffer = sizeBuffer(buffer);
+  const glycolBuffer = sizeBuffer({...buffer,fluidId:'eg',concentrationPercent:50});
+  assert.ok(glycolBuffer.btuPerGal < waterBuffer.btuPerGal);
+  assert.ok(glycolBuffer.minTankVol > waterBuffer.minTankVol);
+});
+test('glycol selection is validated wherever it is used',() => {
+  for (const change of [{fluidId:'diesel'},{fluidId:'eg',concentrationPercent:0},{fluidId:'eg',concentrationPercent:75},
+    {fluidId:'water',concentrationPercent:30},{fluidId:'pg',concentrationPercent:30,designTemp:240}])
+    assert.throws(() => sizeExpansion({...expansion,...change}),RangeError,JSON.stringify(change));
+  // 50% propylene glycol freezes near -26 °F, so a -40 °F buffer low is rejected.
+  assert.throws(() => sizeBuffer({...buffer,fluidId:'pg',concentrationPercent:50,lowTemp:-40,highTemp:0}),RangeError);
+});
+const drawdown = {pumpFlow:10,cutIn:40,cutOut:60,runtimeMin:1,precharge:38,acceptanceLimit:1};
+test('drawdown reproduces the published 40/60 multiplier and cycling rule',() => {
+  const d = sizeDrawdown(drawdown);
+  // P0 (1/P1 - 1/P2) in absolute pressures, the published drawdown coefficient.
+  near(d.drawdownFactor,52.7*(1/54.7-1/74.7),1e-12);
+  assert.ok(d.drawdownFactor > 0.25 && d.drawdownFactor < 0.27);
+  near(d.requiredDrawdown,10);
+  near(d.minTankVol,10/d.drawdownFactor,1e-9);
+  // A one-minute minimum run is the familiar 15 starts per hour worst case.
+  near(d.maxStartsPerHour,15);
+  near(sizeDrawdown({...drawdown,runtimeMin:2}).maxStartsPerHour,7.5);
+  // A larger pressure band and a higher precharge both free up more drawdown.
+  assert.ok(sizeDrawdown({...drawdown,cutOut:80}).drawdownFactor > d.drawdownFactor);
+  assert.ok(sizeDrawdown({...drawdown,precharge:20}).drawdownFactor < d.drawdownFactor);
+  // The supplier acceptance limit still caps the usable fraction.
+  near(sizeDrawdown({...drawdown,acceptanceLimit:0.1}).drawdownFactor,0.1-d.lowWaterFraction,1e-12);
+});
+test('drawdown inputs fail explicitly',() => {
+  for (const change of [{cutOut:40},{cutOut:30},{precharge:41},{pumpFlow:0},{runtimeMin:0},
+    {acceptanceLimit:0},{acceptanceLimit:1.2},{polytropicExponent:1.5},{acceptanceLimit:0.02},{cutIn:0}])
+    assert.throws(() => sizeDrawdown({...drawdown,...change}),RangeError,JSON.stringify(change));
+});
+test('fill density keeps the water floor and follows a heavier glycol',() => {
+  const water = designLiquidDensity({hotTempF:180,minPressure:20});
+  near(water,62.5);
+  near(designLiquidDensity({fluidId:'water',coldTempF:40,hotTempF:180,minPressure:20}),62.5);
+  const glycol = designLiquidDensity({fluidId:'eg',concentrationPercent:50,coldTempF:40,hotTempF:180,minPressure:20});
+  assert.ok(glycol > 66 && glycol < 72,String(glycol));
+});
+const drawdownUI = {product:PRODUCTS[3],inputs:{...DEFAULT_INPUTS,mechanicalMethod:'entered',
+  pumpFlowGPM:20,pumpRuntimeMin:1,cutInPressure:40,cutOutPressure:60,precharge:38,acceptancePercent:100,
+  operatingTemp:140,designTemp:200,minPressure:40,maxPressure:60,reliefPressure:100,mawp:150,
+  shellStress:20000,pipeStress:17100,headStress:20000,nozzleStress:17100,stressBasis:basis.stressBasis},
+  sizingMode:'drawdown',tankVol:'',materialId:'CS',CA:0.0625,supportType:'skirt'};
+test('drawdown mode sizes a real vessel and appears in the report',() => {
+  const s = evaluateDesign(drawdownUI);
+  assert.equal(s.error,null);
+  assert.equal(s.sizing.kind,'drawdown');
+  assert.equal(s.effectiveTankVol,Math.ceil(s.sizing.minTankVol*1.05));
+  assert.ok(s.vessel.actualVolGal >= s.effectiveTankVol);
+  const h = generateReportHTML(drawdownUI.product,drawdownUI.inputs,s.sizing,s.vessel,'data:image/png;base64,');
+  assert.ok(h.includes('Required drawdown'));
+  assert.ok(h.includes('Worst-case starts per hour'));
+  assert.ok(h.includes('38 psig'));
+  assert.ok(!h.includes('undefined') && !h.includes('NaN') && !h.includes('Infinity'));
+  // The pressure basis must bracket the switch settings, and a buffer has no gas charge.
+  assert.match(evaluateDesign({...drawdownUI,inputs:{...drawdownUI.inputs,maxPressure:50,reliefPressure:100}}).error,/bracket the switch settings/);
+  assert.match(evaluateDesign({...drawdownUI,product:PRODUCTS[4]}).error,/membrane tank/);
+});
+test('a glycol design reaches the vessel, its loads and its report',() => {
+  const glycolUI = {...ui,inputs:{...ui.inputs,fluidId:'eg',concentrationPercent:50}};
+  const s = evaluateDesign(glycolUI);
+  assert.equal(s.error,null);
+  const water = evaluateDesign(ui);
+  assert.equal(water.error,null);
+  // Heavier fill raises static head and the full-liquid load case.
+  assert.ok(s.vessel.liquidDensity > water.vessel.liquidDensity);
+  assert.ok(s.vessel.waterWeight > water.vessel.waterWeight);
+  // Glycol is far more viscous, so the nozzle screen must not reuse water viscosity.
+  const glycolFlow = calcNozzleFlow({Q_gpm:20,d_in:2,tempF:100,pressurePsig:40,materialId:'CS',
+    nozzleLength:3,service:'system',fluidId:'pg',concentrationPercent:50});
+  const waterFlow = calcNozzleFlow({Q_gpm:20,d_in:2,tempF:100,pressurePsig:40,materialId:'CS',nozzleLength:3,service:'system'});
+  assert.ok(glycolFlow.mu_cP > 3 * waterFlow.mu_cP);
+  assert.ok(glycolFlow.Re < waterFlow.Re);
+  const h = generateReportHTML(ui.product,glycolUI.inputs,s.sizing,s.vessel,'data:image/png;base64,');
+  assert.ok(h.includes('50% Ethylene glycol'));
+  assert.ok(h.includes('freeze point'));
+  assert.ok(h.includes('inhibitor'));
   assert.ok(!h.includes('undefined') && !h.includes('NaN') && !h.includes('Infinity'));
 });
